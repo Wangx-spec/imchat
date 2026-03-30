@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>LangChain Chat Tester</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #0f172a;
+      color: #e2e8f0;
+    }
+    .container {
+      max-width: 860px;
+      margin: 24px auto;
+      padding: 16px;
+    }
+    .panel {
+      background: #111827;
+      border: 1px solid #374151;
+      border-radius: 12px;
+      padding: 16px;
+    }
+    h1 { font-size: 20px; margin: 0 0 12px; }
+    .chat-box {
+      height: 480px;
+      overflow-y: auto;
+      border: 1px solid #374151;
+      border-radius: 10px;
+      padding: 12px;
+      background: #030712;
+    }
+    .msg {
+      margin: 8px 0;
+      line-height: 1.45;
+      white-space: pre-wrap;
+    }
+    .user { color: #93c5fd; }
+    .assistant { color: #86efac; }
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      margin-top: 12px;
+    }
+    input, button {
+      font-size: 14px;
+      border-radius: 8px;
+      border: 1px solid #4b5563;
+      padding: 10px;
+      background: #1f2937;
+      color: #e5e7eb;
+    }
+    #messageInput { flex: 1; }
+    button { cursor: pointer; min-width: 96px; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .tip {
+      margin-top: 10px;
+      font-size: 12px;
+      color: #9ca3af;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="panel">
+      <h1>LangChain Chat Tester</h1>
+      <div id="chatBox" class="chat-box"></div>
+      <div class="toolbar">
+        <input id="messageInput" type="text" placeholder="Type message, e.g. what time is it?" />
+        <button id="sendBtn">Send</button>
+        <button id="resetBtn">Reset</button>
+      </div>
+      <div class="tip">Try: "What time is it?" or "calculate (12 + 8) * 3 / 2"</div>
+    </div>
+  </div>
+
+  <script>
+    const chatBox = document.getElementById("chatBox");
+    const messageInput = document.getElementById("messageInput");
+    const sendBtn = document.getElementById("sendBtn");
+    const resetBtn = document.getElementById("resetBtn");
+    const sessionKey = "lc_chat_session_id";
+    const sessionId = localStorage.getItem(sessionKey) || crypto.randomUUID();
+    localStorage.setItem(sessionKey, sessionId);
+
+    function appendMessage(role, text) {
+      const div = document.createElement("div");
+      div.className = `msg ${role}`;
+      div.textContent = `${role === "user" ? "You" : "Assistant"}: ${text}`;
+      chatBox.appendChild(div);
+      chatBox.scrollTop = chatBox.scrollHeight;
+    }
+
+    async function sendMessage() {
+      const message = messageInput.value.trim();
+      if (!message) return;
+      appendMessage("user", message);
+      messageInput.value = "";
+      sendBtn.disabled = true;
+
+      try {
+        const response = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session_id: sessionId, message })
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          appendMessage("assistant", `Error: ${data.detail || "request failed"}`);
+          return;
+        }
+        appendMessage("assistant", data.answer || "No answer");
+      } catch (err) {
+        appendMessage("assistant", `Error: ${err}`);
+      } finally {
+        sendBtn.disabled = false;
+        messageInput.focus();
+      }
+    }
+
+    async function resetSession() {
+      try {
+        await fetch("/api/reset", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ session_id: sessionId })
+        });
+      } catch (err) {
+      }
+      chatBox.innerHTML = "";
+      appendMessage("assistant", "Session reset.");
+      messageInput.focus();
+    }
+
+    sendBtn.addEventListener("click", sendMessage);
+    resetBtn.addEventListener("click", resetSession);
+    messageInput.addEventListener("keydown", (event) => {
+      if (event.key === "Enter") sendMessage();
+    });
+
+    appendMessage("assistant", "Web chat is ready.");
+    messageInput.focus();
+  </script>
+</body>
+</html>
