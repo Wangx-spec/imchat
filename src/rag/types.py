@@ -1,0 +1,35 @@
+from dataclasses import dataclass, field
+from typing import Any
+
+@dataclass
+class RAGConfig:
+    enabled: bool = False
+    source_dirs: list[str] = field(default_factory=list)
+    index_dir: str = "data/rag_index"
+    chunk_overlap: int = 120
+    top_k: int = 4
+    retrieval_k: int = 12
+    embedding_provider: str = "dashscope"
+    embedding_api_key: str | None = None
+    embedding_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    embedding_model: str = "text-embedding-v4"
+    embedding_dimensions: int = 1024
+    chunk_size: int = 800
+    rrf_k: int = 60
+    rebuild: bool = False
+
+@dataclass
+class RetrievalResult:
+    query: str
+    parents: list[Any] = field(default_factory=list)
+    sources: list[str] = field(default_factory=list)
+    debug: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class AnswerResult:
+    query: str
+    route: str
+    answer: str
+    sources: list[str] = field(default_factory=list)
+    debug: dict[str, Any] = field(default_factory=dict)
