@@ -5,6 +5,7 @@ from langchain_community.vectorstores import FAISS
 from pathlib import Path
 from typing import Any
 import logging
+import json
 logger = logging.getLogger(__name__)
 
 class LocalFAISSIndexStore:
@@ -23,6 +24,9 @@ class LocalFAISSIndexStore:
             chunk_size=10  # 关键：每批最多10条数据，避免内存溢出
         )
         self.vectorstore: FAISS | None = None
+        self._last_children_count = -1
+        self.last_meta_match: bool | None = None
+        self.last_meta_reason: str | None = None
 
     def exists(self) -> bool:
         """Check whether a previously saved FAISS index exists on disk."""
@@ -33,8 +37,10 @@ class LocalFAISSIndexStore:
         """Build a FAISS vector index from child documents in memory."""
         if not children:
             raise ValueError("children is empty, cannot build vector index")
-        
+
+        self._last_children_count = len(children)  # 给 save() 用
         self.vectorstore = FAISS.from_documents(children, self.embeddings)
+        
         logger.info("FAISS index built with %d child documents", len(children))
     
     def save(self) -> None:
@@ -46,10 +52,28 @@ class LocalFAISSIndexStore:
         self.vectorstore.save_local(str(self.index_dir))
         logger.info("FAISS index saved to %s", self.index_dir)
 
-    def load(self) -> bool:
+        # 关键：同时保存 meta（用当前 children 数量）
+        # 建议在 build() 里记录 self._last_children_count
+        meta: dict[str, Any] = self._build_signature(self._last_children_count)
+        self._save_meta(meta)
+        logger.info("FAISS index saved with meta: %s", meta)
+
+    def load(self, expected_children_count: int | None = None) -> bool:
         """Load FAISS index from local storage; return False if not found."""
         if not self.exists():
             logger.info("FAISS index not found at %s", self.index_dir)
+            self.last_meta_match = None
+            self.last_meta_reason = "index_files_missing"
+            return False
+        
+        #expected signature
+        if expected_children_count is None:
+            self.last_meta_match = False
+            self.last_meta_reason = "expected_children_count_missing"
+            return False
+            
+        expected = self._build_signature(expected_children_count)
+        if not self._is_meta_match(expected):
             return False
         
         self.vectorstore = FAISS.load_local(
@@ -69,3 +93,58 @@ class LocalFAISSIndexStore:
             search_type="similarity",
             search_kwargs={"k": k}
         )
+    
+    @property
+    def _meta_path(self) -> Path:
+        return self.index_dir / "index.meta.json"
+    
+    def _build_signature(self, children_count: int) -> dict[str, Any]:
+        """
+        Build signature from current runtime config + data shape.
+        """
+        return {
+            "source_dirs": sorted(self.cfg.source_dirs),
+            "embedding_model": self.cfg.embedding_model,
+            "embedding_dimensions": int(self.cfg.embedding_dimensions),
+            "chunk_size": int(self.cfg.chunk_size), 
+            "chunk_overlap": int(self.cfg.chunk_overlap),
+            "children_count": int(children_count),
+        }
+    
+    def _save_meta(self, meta: dict[str, Any]) -> None:
+        """
+        Persist meta signature alongside FAISS files.
+        """
+        self.index_dir.mkdir(parents=True, exist_ok=True)
+        self._meta_path.write_text(
+            json.dumps(meta, ensure_ascii=False, indent=2),
+            encoding="utf-8"
+        )
+    
+    def _load_meta(self) -> dict | None:
+        """
+        Load stored meta signature. Return None if missing/corrupted.
+        """
+        if not self._meta_path.exists():
+            return None
+        try:
+            return json.loads(self._meta_path.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+    
+    def _is_meta_match(self, expected_meta: dict) -> bool:
+        """
+        Compare current meta signature with expected signature.
+        """
+        stored = self._load_meta()
+        if stored is None:
+            self.last_meta_match = False
+            self.last_meta_reason = "meta_missing_or_corrupted"
+            return False
+        if stored != expected_meta:
+            self.last_meta_match = False
+            self.last_meta_reason = "meta_mismatch"
+            return False
+        self.last_meta_match = True
+        self.last_meta_reason = "meta_match"
+        return True

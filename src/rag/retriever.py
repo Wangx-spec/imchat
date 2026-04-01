@@ -11,7 +11,7 @@ class HybridRetriever:
         self,
         vectorstore: Any,
         children: list[Document],
-        parent_map: dict[str, str],
+        parent_map: dict[str, Document],
         child_parent: dict[str, str],
         rrf_k: int = 60
     ) -> None:

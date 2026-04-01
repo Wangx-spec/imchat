@@ -54,7 +54,7 @@ def main() -> None:
     print("[STEP3] LocalFAISSIndexStore() done")
 
     print("[STEP3] load() ...")
-    loaded = store.load()
+    loaded = store.load(expected_children_count=len(children))
     print(f"[STEP3] load() done, loaded={loaded}")
     if not loaded:
         print("[STEP3] build(children) ...")
@@ -86,7 +86,7 @@ def main() -> None:
     print(f"index_loaded={loaded}")
     print(f"parents_total={len(parents)} children_total={len(children)}")
     print(f"result_parent_hits={len(result.parents)}")
-    print(f"result_sources_top3={result.sources[:3]}")
+    print(f"result_sources={result.sources}")
     print(f"result_debug={result.debug}")
 
     # Optional sample output preview

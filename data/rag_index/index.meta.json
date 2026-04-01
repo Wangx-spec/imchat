@@ -1,0 +1,10 @@
+{
+  "source_dirs": [
+    "/Users/aimiaomiao/cook-proj/source_dir/file_data"
+  ],
+  "embedding_model": "text-embedding-v4",
+  "embedding_dimensions": 1024,
+  "chunk_size": 800,
+  "chunk_overlap": 120,
+  "children_count": 2197
+}

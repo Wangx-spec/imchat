@@ -312,3 +312,90 @@ Step4 只依赖以下稳定接口：
    - [ ] 统一类型标注：`parent_map: dict[str, Document]`。
    - [ ] 保持 `RetrievalResult.debug` 字段稳定，便于 Step4 接入。
 
+---
+
+## 12. 基于最新验证的代码修改方案（建议直接执行）
+
+验证结论（来自 `tmp_validate_kungpao.py`）：
+
+- `LOAD_INDEX`：首条命中偏题，且未命中 `宫保鸡丁`。
+- `FORCE_REBUILD`：首条正确命中 `宫保鸡丁.md`。
+
+结论：当前主要问题是**索引陈旧复用**，其次才是重排质量。
+
+### 12.1 P0 必做：索引签名防陈旧（`src/rag/index_store.py`）
+
+新增方法：
+
+- `_build_signature(cfg, children) -> dict`
+- `_save_meta(meta: dict) -> None`
+- `_load_meta() -> dict | None`
+- `_is_meta_match(meta: dict) -> bool`
+
+签名建议字段：
+
+- `source_dirs`（排序后）
+- `embedding_model`
+- `embedding_dimensions`
+- `chunk_size`
+- `chunk_overlap`
+- `children_count`
+
+关键逻辑：
+
+1. `save()` 时同时写入 `index.meta.json`。
+2. `load()` 时先校验 `index.faiss/index.pkl/index.meta.json` 均存在。
+3. meta 不一致则返回 `False`，让上层触发重建。
+
+伪代码：
+
+```python
+def load(self) -> bool:
+    if not self.exists():
+        return False
+    meta = self._load_meta()
+    if not self._is_meta_match(meta):
+        return False
+    self.vectorstore = FAISS.load_local(...)
+    return True
+```
+
+### 12.2 P0 必做：服务层将“索引是否重建”写入 debug（`src/rag/service.py`）
+
+在 `initialize()` 记录：
+
+- `index_loaded: bool`
+- `index_rebuilt: bool`
+
+并在 `stats()` 或日志输出中可见，方便排障。
+
+### 12.3 P1 建议：detail query 的轻量命中兜底（`src/rag/retriever.py`）
+
+在 `hybrid_search()` 内做最小增强（不改整体架构）：
+
+1. 对 `query` 提取核心词（如菜名）。
+2. 若 `source/title` 包含核心词，对该 child 增加固定加分（如 `+0.05`）。
+3. 仅在 `detail` 场景启用（由 Step4 `route` 透传可后续加）。
+
+伪代码：
+
+```python
+for doc in fused_children:
+    if keyword in doc.metadata.get("title","") or keyword in doc.metadata.get("source",""):
+        doc.metadata["rrf_score"] += 0.05
+```
+
+### 12.4 P1 建议：修正类型与接口一致性
+
+- `HybridRetriever.__init__` 中 `parent_map` 类型改为 `dict[str, Document]`。
+- `LocalFAISSIndexStore.as_retriever` 返回类型标注改为实际 retriever 类型（不要 `-> None`）。
+
+### 12.5 回归验证（执行顺序）
+
+1. 跑：`PYTHONPATH=src python src/tests/tmp_validate_kungpao.py`
+2. 预期：
+   - `LOAD_INDEX` 与 `FORCE_REBUILD` 命中趋于一致
+   - `contains_宫保鸡丁_source = True`
+3. 再跑：`PYTHONPATH=src python src/tests/tmp_step3_smoke.py`
+4. 检查 `debug` 中新增字段：`index_loaded/index_rebuilt`（若已接入）。
+
