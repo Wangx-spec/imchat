@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>LangChain Chat Tester</title>
+  <title>LangGraph Chat Tester</title>
   <style>
     :root { color-scheme: light dark; }
     body {
@@ -65,7 +65,7 @@
 <body>
   <div class="container">
     <div class="panel">
-      <h1>LangChain Chat Tester</h1>
+      <h1>LangGraph Chat Tester</h1>
       <div id="chatBox" class="chat-box"></div>
       <div class="toolbar">
         <input id="messageInput" type="text" placeholder="Type message, e.g. what time is it?" />
@@ -91,6 +91,19 @@
       div.textContent = `${role === "user" ? "You" : "Assistant"}: ${text}`;
       chatBox.appendChild(div);
       chatBox.scrollTop = chatBox.scrollHeight;
+      return div;
+    }
+
+    function decodeSseFrames(buffer) {
+      const frames = [];
+      let rest = buffer;
+      while (true) {
+        const idx = rest.indexOf("\n\n");
+        if (idx === -1) break;
+        frames.push(rest.slice(0, idx));
+        rest = rest.slice(idx + 2);
+      }
+      return { frames, rest };
     }
 
     async function sendMessage() {
@@ -101,17 +114,81 @@
       sendBtn.disabled = true;
 
       try {
-        const response = await fetch("/api/chat", {
+        const response = await fetch("/api/chat/stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ session_id: sessionId, message })
         });
-        const data = await response.json();
         if (!response.ok) {
+          const data = await response.json();
           appendMessage("assistant", `Error: ${data.detail || "request failed"}`);
           return;
         }
-        appendMessage("assistant", data.answer || "No answer");
+
+        if (!response.body) {
+          appendMessage("assistant", "Error: stream not available");
+          return;
+        }
+
+        const assistantNode = appendMessage("assistant", "");
+        let assistantText = "";
+        let pending = "";
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+
+          pending += decoder.decode(value, { stream: true });
+          const parsed = decodeSseFrames(pending);
+          pending = parsed.rest;
+
+          for (const frame of parsed.frames) {
+            const lines = frame.split("\n");
+            let eventName = "message";
+            const dataLines = [];
+
+            for (const line of lines) {
+              if (line.startsWith("event:")) {
+                eventName = line.slice(6).trim();
+              } else if (line.startsWith("data:")) {
+                dataLines.push(line.slice(5).trim());
+              }
+            }
+
+            if (!dataLines.length) continue;
+
+            let payload = null;
+            try {
+              payload = JSON.parse(dataLines.join("\n"));
+            } catch (err) {
+              continue;
+            }
+
+            if (eventName === "chunk") {
+              const text = payload.text || "";
+              assistantText += text;
+              assistantNode.textContent = `Assistant: ${assistantText}`;
+              chatBox.scrollTop = chatBox.scrollHeight;
+            } else if (eventName === "done") {
+              if (!assistantText) {
+                assistantText = payload.answer || "";
+                assistantNode.textContent = `Assistant: ${assistantText}`;
+                chatBox.scrollTop = chatBox.scrollHeight;
+              }
+            } else if (eventName === "error") {
+              const detail = payload.detail || "stream failed";
+              assistantNode.textContent = `Assistant: Error: ${detail}`;
+              chatBox.scrollTop = chatBox.scrollHeight;
+            }
+          }
+        }
+
+        if (!assistantText) {
+          assistantNode.textContent = "Assistant: No answer";
+        }
       } catch (err) {
         appendMessage("assistant", `Error: ${err}`);
       } finally {
@@ -140,7 +217,7 @@
       if (event.key === "Enter") sendMessage();
     });
 
-    appendMessage("assistant", "Web chat is ready.");
+    appendMessage("assistant", "Web chat is ready (stream mode).");
     messageInput.focus();
   </script>
 </body>

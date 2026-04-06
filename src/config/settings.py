@@ -15,6 +15,8 @@ class Settings:
     openai_model: str = "gpt-4o-mini"
     openai_base_url: str | None = None
     verbose: bool = False
+    agent_runtime: str = "langgraph"
+    agent_streaming: bool = True
     rag_enabled: bool = False
     rag_source_dirs: list[str] = field(default_factory=list)
     rag_index_dir: str = "data/rag_index"
@@ -59,6 +61,8 @@ def load_settings() -> Settings:
         openai_model=model,
         openai_base_url=base_url,
         verbose=verbose,
+        agent_runtime=_parse_runtime("AGENT_RUNTIME", "langgraph"),
+        agent_streaming=_parse_bool("AGENT_STREAMING", True),
         rag_enabled=_parse_bool("RAG_ENABLED", False),
         rag_source_dirs=rag_source_dirs,
         rag_index_dir=os.getenv("RAG_INDEX_DIR", "data/rag_index").strip() or "data/rag_index",
@@ -88,6 +92,16 @@ def _parse_bool(name: str, default: bool) -> bool:
         return False
 
     logger.warning("Invalid bool env %s=%r, fallback to default=%s", name, raw, default)
+    return default
+
+
+def _parse_runtime(name: str, default: str) -> str:
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw in {"langchain", "langgraph"}:
+        return raw
+    logger.warning("Invalid runtime env %s=%r, fallback to default=%s", name, raw, default)
     return default
 
 def _parse_int(name: str, default: int, minimum: int) -> int:

@@ -44,6 +44,7 @@
 - `RAG_ENABLED=false` 时，系统行为与当前一致。
 - 启动失败可降级，不阻塞主进程。
 - 配置与业务规则分层：`Settings` 负责读取，`rag/config.py` 负责映射/校验。
+- Agent 运行时支持 `langgraph/langchain` 切换，不影响 RAG 工具接口约定。
 
 ## 1.4 技术路线（一句话）
 
