@@ -104,6 +104,15 @@ def search_knowledge_base(query: str) -> str:
         )
     try:
         result = _rag_service.answer(q)
+        dbg = getattr(result, "debug", {}) or {}
+        logger.info(
+            "[TOOL_KB_DEBUG] query=%r variant_queries=%s direct_hit_titles=%s exact_match_hit=%s low_confidence_blocked=%s",
+            q,
+            dbg.get("variant_queries", []),
+            dbg.get("direct_hit_titles", []),
+            dbg.get("exact_match_hit", False),
+            dbg.get("low_confidence_blocked", False),
+        )
         text = _build_kb_payload(
             query=q,
             ok=True,

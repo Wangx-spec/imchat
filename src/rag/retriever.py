@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
@@ -9,6 +10,8 @@ import json
 import urllib.request
 
 from rag.types import RetrievalResult
+
+logger = logging.getLogger(__name__)
 
 
 class HybridRetriever:
@@ -33,7 +36,10 @@ class HybridRetriever:
         self.child_parent = child_parent
         self.rrf_k = rrf_k
 
-        self.bm25 = BM25Retriever.from_documents(children)
+        self.bm25 = BM25Retriever.from_documents(
+            children,
+            preprocess_func=self._tokenize_for_sparse,
+        )
         self.bm25.k = 5
         self.rerank_enabled = rerank_enabled
         self.rerank_model = rerank_model
@@ -51,6 +57,45 @@ class HybridRetriever:
         self.bm25.k = k
         return self.bm25.invoke(query)
 
+    def _tokenize_for_sparse(self, text: str) -> list[str]:
+        t = (text or "").lower().strip()
+        if not t:
+            return []
+
+        words = re.findall(r"[a-z0-9_]+", t)
+        zh = re.findall(r"[\u4e00-\u9fff]", t)
+        bigrams = ["".join(zh[i : i + 2]) for i in range(len(zh) - 1)]
+        return words + zh + bigrams
+
+    def _expand_queries(self, query: str) -> list[str]:
+        q = (query or "").strip()
+        if not q:
+            return []
+        variants = [q]
+        q2 = q
+        remove_phrases = [
+            "是什么", "是什么？", "是什么?", "含义", "定义", "介绍",
+            "怎么制作", "如何制作", "制作方法", "怎么做", "做法", "教程", "步骤", "需要什么",
+            "是什么以及", "以及", "并且", "还有",
+        ]
+        for pat in remove_phrases:
+            q2 = q2.replace(pat, " ")
+        q2 = re.sub(r"[？?！!。,.，；;：:\s]+", " ", q2).strip()
+        if q2 and q2 != q:
+            variants.append(q2)
+            variants.append(f"{q2} 做法")
+            variants.append(f"{q2} 教程")
+            variants.append(f"{q2} 是什么")
+        out: list[str] = []
+        seen: set[str] = set()
+        for v in variants:
+            v = (v or "").strip()
+            if v and v not in seen:
+                seen.add(v)
+                out.append(v)
+        return out[:6]
+
+
     def _doc_key(self, doc: Document) -> str:
         md = doc.metadata or {}
         cid = md.get("child_id")
@@ -63,6 +108,19 @@ class HybridRetriever:
             return f"{src}::{idx}"
 
         return doc.page_content[:100]
+
+    def _parent_key(self, doc: Document) -> str:
+        md = doc.metadata or {}
+        pid = str(md.get("parent_id", "")).strip()
+        if pid:
+            return pid
+        source = str(md.get("source", "")).strip()
+        if source:
+            return source
+        title = str(md.get("title", "")).strip()
+        if title:
+            return title
+        return doc.page_content[:120]
 
     def _build_rerank_text(self, p: Document) -> str:
         md = p.metadata or {}
@@ -154,6 +212,8 @@ class HybridRetriever:
 
         for d in fused:
             k = self._doc_key(d)
+            if d.metadata is None:
+                d.metadata = {}
             d.metadata["rrf_score"] = scores[k]
 
         return fused
@@ -189,6 +249,82 @@ class HybridRetriever:
                 seen.add(s)
                 out.append(s)
         return out
+
+    def _direct_parent_lexical_recall(self, query: str, limit: int) -> list[Document]:
+        q = (query or "").strip().lower()
+        if not q or limit <= 0:
+            return []
+
+        q_tokens = set(self._tokenize_for_sparse(q))
+        hits: list[tuple[float, Document]] = []
+
+        for p in self.parent_map.values():
+            md = p.metadata or {}
+            title = str(md.get("title", "")).lower()
+            source = str(md.get("source", "")).lower()
+            snippet = p.page_content[:1200].lower()
+
+            score = 0.0
+            if q in title:
+                score += 3.0
+            if q in source:
+                score += 2.0
+            if q in snippet:
+                score += 1.2
+
+            d_tokens = set(self._tokenize_for_sparse(f"{title} {source} {snippet[:300]}"))
+            overlap = len(q_tokens & d_tokens)
+            score += min(overlap * 0.1, 1.5)
+
+            if score > 0:
+                hits.append((score, p))
+
+        hits.sort(key=lambda x: x[0], reverse=True)
+        return [x[1] for x in hits[:limit]]
+
+    def _merge_unique_parents(self, primary: list[Document], extra: list[Document]) -> list[Document]:
+        out: list[Document] = []
+        seen: set[str] = set()
+        for p in primary + extra:
+            k = self._parent_key(p)
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append(p)
+        return out
+
+    def _compute_exact_match_hit(self, variants: list[str], parents: list[Document]) -> bool:
+        if not variants or not parents:
+            return False
+        candidate_terms: set[str] = set()
+        for v in variants:
+            v = (v or "").strip().lower()
+            if not v:
+                continue
+            # 保留完整短语（如“奥利奥冰淇淋”）
+            if len(v) >= 2:
+                candidate_terms.add(v)
+            # 加入 token（适配中文+英文）
+            for t in self._tokenize_for_sparse(v):
+                t = (t or "").strip().lower()
+                if len(t) >= 2:
+                    candidate_terms.add(t)
+        stop_terms = {
+            "是什么", "怎么做", "做法", "教程", "步骤", "如何", "需要什么",
+            "制作", "怎么制作", "如何制作", "介绍", "定义", "含义",
+        }
+        candidate_terms = {t for t in candidate_terms if t not in stop_terms}
+        if not candidate_terms:
+            return False
+        for p in parents:
+            md = p.metadata or {}
+            title = str(md.get("title", "")).strip().lower()
+            source = str(md.get("source", "")).strip().lower()
+            source_name = source.replace("\\", "/").split("/")[-1].replace(".md", "")
+            for term in candidate_terms:
+                if term in title or term in source_name or term in source:
+                    return True
+        return False
 
     def _extract_query_tokens(self, query: str) -> list[str]:
         q = (query or "").strip()
@@ -266,21 +402,50 @@ class HybridRetriever:
         return reranked, tokens, changed
 
     def hybrid_search(self, query: str, retrieval_k: int, top_k: int) -> RetrievalResult:
-        vector_docs = self.vector_search(query, retrieval_k)
-        bm25_docs = self.bm25_search(query, retrieval_k)
+        variants = self._expand_queries(query)
+        if not variants:
+            variants = [query]
+
+        k_per = max(8, retrieval_k // max(1, len(variants)))
+        all_vector_docs: list[Document] = []
+        all_bm25_docs: list[Document] = []
+
+        for v in variants:
+            all_vector_docs.extend(self.vector_search(v, k_per))
+            all_bm25_docs.extend(self.bm25_search(v, k_per))
+
+        vector_docs = all_vector_docs
+        bm25_docs = all_bm25_docs
         fused_children = self.rrf_fuse(vector_docs, bm25_docs)
 
-        # 先放大 parent 候选池，再做 query-aware 重排，最后裁剪到 top_k
-        candidate_parent_k = max(top_k * 8, 40)
-        parents = self.child_to_parent(fused_children, top_k=candidate_parent_k)
+        candidate_parent_k = max(top_k * 8, self.rerank_candidate_k, 40)
+        parents_from_children = self.child_to_parent(fused_children, top_k=candidate_parent_k)
+
+        direct_hits = self._direct_parent_lexical_recall(query, limit=max(1, candidate_parent_k // 2))
+
+        for v in variants:
+            if v != query:
+                more_hits = self._direct_parent_lexical_recall(v, limit=max(1, candidate_parent_k // 4))
+                direct_hits = self._merge_unique_parents(direct_hits, more_hits)
+
+        parents = self._merge_unique_parents(parents_from_children, direct_hits)
         candidate_parent_count_before_trim = len(parents)
         top_titles_before_rerank = [str(p.metadata.get("title", "")) for p in parents[:5]]
         parents, tokens, rerank_applied = self._rerank_parents_by_query(parents, query)
 
         # qwen重排
         parents, rr_info = self._rerank_parents_by_qwen(query, parents)
-        
+
+        exact_match_hit = self._compute_exact_match_hit(variants, parents)
         parents = parents[:top_k]
+
+        logger.info(
+            "[RETRIEVE_DEBUG] query=%r variant_queries=%s direct_hit_titles=%s exact_match_hit=%s",
+            query,
+            variants,
+            [str(p.metadata.get("title", "")) for p in direct_hits[:5]],
+            exact_match_hit,
+        )
 
         return RetrievalResult(
             query=query,
@@ -292,14 +457,16 @@ class HybridRetriever:
                 "fused_hits": len(fused_children),
                 "parent_hits": len(parents),
                 "rrf_k": self.rrf_k,
+                "variant_queries": variants,
                 "query_tokens": tokens,
                 "rerank_applied": rerank_applied,
                 "candidate_parent_k": candidate_parent_k,
                 "candidate_parent_count_before_trim": candidate_parent_count_before_trim,
+                "direct_hit_count": len(direct_hits),
+                "direct_hit_titles": [str(p.metadata.get("title", "")) for p in direct_hits[:5]],
+                "exact_match_hit": exact_match_hit,
                 "top_titles_before_rerank": top_titles_before_rerank,
                 "top_titles": [str(p.metadata.get("title", "")) for p in parents[:3]],
-
-
                 "qwen_rerank_enabled": self.rerank_enabled,
                 "qwen_rerank_called": rr_info.get("rerank_called", False),
                 "qwen_rerank_ok": rr_info.get("rerank_ok", False),

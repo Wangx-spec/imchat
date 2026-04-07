@@ -134,6 +134,45 @@ class RAGService:
             route = self.router.route_query(query)
             rewritten = self.router.rewrite_query(query, route)
             ret = self.retrieve(rewritten)
+            exact_hit = bool((ret.debug or {}).get("exact_match_hit", False))
+
+            # 低置信度门控：detail 场景没有明确命中时，避免输出“像正确答案”的幻觉内容
+            if route == "detail" and not exact_hit:
+                top_sources = ret.sources[:3]
+                source_lines = "\n".join([f"- {s}" for s in top_sources]) if top_sources else "- 无"
+                blocked_answer = (
+                    "我没有在知识库中精确命中到该问题的目标条目，暂时不输出详细步骤，"
+                    "以避免给出不可靠内容。你可以换一个更具体的问法（例如完整菜名/文档标题）。\n\n"
+                    f"当前可参考来源：\n{source_lines}"
+                )
+                debug = dict(ret.debug or {})
+                debug["low_confidence_blocked"] = True
+                logger.info(
+                    "[ANSWER_GUARD] query=%r route=%s exact_match_hit=%s low_confidence_blocked=%s variant_queries=%s direct_hit_titles=%s",
+                    query,
+                    route,
+                    exact_hit,
+                    True,
+                    debug.get("variant_queries", []),
+                    debug.get("direct_hit_titles", []),
+                )
+                return AnswerResult(
+                    query=query,
+                    route=route,
+                    answer=blocked_answer,
+                    sources=ret.sources,
+                    debug=debug,
+                )
+
+            logger.info(
+                "[ANSWER_GUARD] query=%r route=%s exact_match_hit=%s low_confidence_blocked=%s variant_queries=%s direct_hit_titles=%s",
+                query,
+                route,
+                exact_hit,
+                False,
+                (ret.debug or {}).get("variant_queries", []),
+                (ret.debug or {}).get("direct_hit_titles", []),
+            )
             answer_text = self.router.build_answer(query, route, ret.parents)
             return AnswerResult(
                 query=query,

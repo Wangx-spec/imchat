@@ -1,6 +1,6 @@
 {
   "source_dirs": [
-    "/Users/aimiaomiao/cook-proj/source_dir/file_data"
+    "E:\\Agent projects\\imchat\\source_dir\\file_data"
   ],
   "embedding_model": "text-embedding-v4",
   "embedding_dimensions": 1024,

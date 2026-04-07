@@ -15,7 +15,9 @@ def run_one(query: str, force_rebuild: bool) -> None:
     print(f"QUERY={query!r} | force_rebuild={force_rebuild}")
     print("service_stats =", service.stats())
 
-    ret = service.retrieve(query)
+    route = service.router.route_query(query)
+    rewritten = service.router.rewrite_query(query, route)
+    ret = service.retrieve(rewritten)
     dbg = ret.debug or {}
 
     print("sources_top5 =")
@@ -24,11 +26,15 @@ def run_one(query: str, force_rebuild: bool) -> None:
 
     # 关键诊断字段（你在 retriever.py 里加过）
     keys = [
+        "variant_queries",
         "vector_hits",
         "bm25_hits",
         "fused_hits",
         "parent_hits",
         "rrf_k",
+        "direct_hit_count",
+        "direct_hit_titles",
+        "exact_match_hit",
         "candidate_parent_k",
         "candidate_parent_count_before_trim",
         "top_titles_before_rerank",
@@ -43,13 +49,24 @@ def run_one(query: str, force_rebuild: bool) -> None:
         "qwen_rerank_scores",
     ]
     print("\ndebug_fields =")
+    print(f"  route: {route}")
+    print(f"  rewritten_query: {rewritten}")
     for k in keys:
         if k in dbg:
             print(f"  {k}: {dbg[k]}")
 
+    ans = service.answer(query)
+    ans_dbg = ans.debug or {}
+    print("\nanswer_guard =")
+    print(f"  answer_route: {ans.route}")
+    print(f"  low_confidence_blocked: {ans_dbg.get('low_confidence_blocked', False)}")
+    print(f"  answer_preview: {(ans.answer or '').replace(chr(10), ' ')[:160]}")
+
     # 便于你快速看是否命中目标文档
     joined = "\n".join(ret.sources)
     print("\ncontains_奥利奥冰淇淋 =", ("奥利奥冰淇淋" in joined))
+    print("contains_姜葱捞鸡 =", ("姜葱捞鸡" in joined))
+    print("contains_姜炒鸡 =", ("姜炒鸡" in joined))
 
 
 def main() -> None:
