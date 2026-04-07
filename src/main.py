@@ -94,11 +94,19 @@ def _stream_langgraph(dialog_runner, history) -> tuple[str, list[dict]]:
 def run_chat() -> None:
     setup_logging()
     settings = load_settings()
-    try:
-        ok, reason = bootstrap_rag(settings)
-        logger.info("[RAG_BOOTSTRAP] ok=%s reason=%s", ok, reason)
-    except Exception as exc:
-        logger.warning("[RAG_BOOTSTRAP] failed=%s", exc)
+
+    if settings.rag_enabled:
+        try:
+            ok, reason = bootstrap_rag(settings)
+            if ok:
+                logger.info("rag_bootstrap_ok reason=%s", reason)
+            else:
+                logger.warning("rag_bootstrap_failed reason=%s", reason)
+        except Exception as exc:
+            logger.warning("rag_bootstrap_failed reason=%s", exc)
+    else:
+        logger.info("rag_bootstrap_skipped reason=disabled")
+
     dialog_runner, runtime = build_dialog_runtime(settings)
     memory = ChatSessionMemory()
 

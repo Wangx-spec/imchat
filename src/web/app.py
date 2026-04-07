@@ -19,6 +19,7 @@ from memory.session_memory import ChatSessionMemory
 from rag.bootstrap import bootstrap_rag
 
 
+
 class ChatRequest(BaseModel):
     session_id: str
     message: str
@@ -106,13 +107,42 @@ _agent, _runtime = build_dialog_runtime(_settings)
 _memory_map: dict[str, ChatSessionMemory] = {}
 _memory_lock = Lock()
 _index_file = Path(__file__).resolve().parent / "static" / "index.html"
+# module globals
+_rag_ok = False
+_rag_reason = "not_bootstrapped"
 
-try:
-    _rag_ok, _rag_reason = bootstrap_rag(_settings)
-    logger.info("[RAG_BOOTSTRAP] ok=%s reason=%s", _rag_ok, _rag_reason)
-except Exception as exc:
-    _rag_ok, _rag_reason = False, str(exc)
-    logger.warning("[RAG_BOOTSTRAP] failed=%s", exc)
+# try:
+#     _rag_ok, _rag_reason = bootstrap_rag(_settings)
+#     logger.info("[RAG_BOOTSTRAP] ok=%s reason=%s", _rag_ok, _rag_reason)
+# except Exception as exc:
+#     _rag_ok, _rag_reason = False, str(exc)
+#     logger.warning("[RAG_BOOTSTRAP] failed=%s", exc)
+
+@app.on_event("startup")
+def on_startup() -> None:
+    global _rag_ok, _rag_reason
+    if not _settings.rag_enabled:
+        _rag_ok, _rag_reason = False, "disabled"
+        logger.info("rag_bootstrap_skipped reason=disabled")
+        return
+    try:
+        _rag_ok, _rag_reason = bootstrap_rag(_settings)
+        if _rag_ok:
+            logger.info("rag_bootstrap_ok reason=%s", _rag_reason)
+        else:
+            logger.warning("rag_bootstrap_failed reason=%s", _rag_reason)
+    except Exception as exc:
+        _rag_ok, _rag_reason = False, f"init_error:{exc}"
+        logger.warning("rag_bootstrap_failed reason=%s", exc)
+
+@app.get("/health")
+def health() -> dict:
+    return {
+        "ok": True,
+        "rag_ready": _rag_ok,
+        "rag_reason": _rag_reason,
+        "runtime": _runtime,
+    }
 
 @app.get("/")
 def index() -> FileResponse:

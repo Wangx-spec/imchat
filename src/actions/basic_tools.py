@@ -1,4 +1,5 @@
 import ast
+import json
 import logging
 import operator as op
 from datetime import datetime
@@ -18,8 +19,31 @@ _ALLOWED_OPERATORS = {
     ast.UAdd: op.pos,
 }
 logger = logging.getLogger("chat.tools")
-
 _rag_service: Any = None
+
+def _build_kb_payload(
+    query: str,
+    ok: bool,
+    answer: str,
+    sources: list[str] | None = None,
+    route: str | None = None,
+    debug: dict[str, Any] | None = None,
+    error: str | None = None
+) -> str:
+    srcs = sources or []
+    payload = {
+        "type": "kb_result",
+        "ok": ok,
+        "query": query,
+        "answer": (answer or "").strip(),
+        "sources": srcs,
+        "citations": [{"id": i + 1, "source": s} for i, s in enumerate(srcs)],
+        "route": route,
+        "debug": debug or {},
+        "error": error,
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
 
 
 def _safe_eval_expr(expression: str) -> float:
@@ -45,6 +69,11 @@ def set_rag_service(service: Any) -> None:
 
 def _format_kb_output(answer: str, sources: list[str] | None) -> str:
     answer_text = (answer or "").strip() or "未检索到有效答案。"
+
+    # 如果回答里已经带引用区块，就不再重复追加来源
+    if "参考文档：" in answer_text or "来源：" in answer_text:
+        return answer_text
+
     lines = [answer_text]
     if sources:
         lines.append("")
@@ -58,21 +87,41 @@ def search_knowledge_base(query: str) -> str:
     """Search local knowledge base and return answer with sources."""
     q = (query or "").strip()
     logger.info("[TOOL_CALL] name=search_knowledge_base query=%s", q)
+
     if not q:
-        return "请提供要检索的问题。"
+        return _build_kb_payload(
+            query=q,
+            ok=False,
+            answer="",
+            error="empty_query",
+        )
     if _rag_service is None:
-        return "知识检索服务未初始化。"
+        return _build_kb_payload(
+            query=q,
+            ok=False,
+            answer="",
+            error="service_not_initialized",
+        )
     try:
         result = _rag_service.answer(q)
-        text = _format_kb_output(
+        text = _build_kb_payload(
+            query=q,
+            ok=True,
             answer=getattr(result, "answer", ""),
             sources=getattr(result, "sources", []),
+            route=getattr(result, "route", None),
+            debug=getattr(result, "debug", {}),
         )
         logger.info("[TOOL_RESULT] name=search_knowledge_base ok")
         return text
     except Exception as exc:
         logger.exception("[TOOL_RESULT] name=search_knowledge_base error=%s", exc)
-        return f"知识检索暂时不可用：{exc}"
+        return _build_kb_payload(
+            query=q,
+            ok=False,
+            answer="",
+            error=f"tool_exception:{exc}",
+        )
 
 
 @tool

@@ -4,7 +4,7 @@
   ],
   "embedding_model": "text-embedding-v4",
   "embedding_dimensions": 1024,
-  "chunk_size": 800,
+  "chunk_size": 700,
   "chunk_overlap": 120,
-  "children_count": 2197
+  "children_count": 2211
 }

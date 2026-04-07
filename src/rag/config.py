@@ -25,6 +25,13 @@ def build_rag_config(settings: Settings) -> RAGConfig:
         chunk_overlap=settings.rag_chunk_overlap,
         rrf_k=settings.rag_rrf_k,
         rebuild=settings.rag_rebuild,
+        rerank_enabled=settings.rag_rerank_enabled,
+        rerank_model=settings.rag_rerank_model,
+        rerank_api_key=settings.rag_rerank_api_key,
+        rerank_endpoint=settings.rag_rerank_endpoint,
+        rerank_top_n=settings.rag_rerank_top_n,
+        rerank_timeout_ms=settings.rag_rerank_timeout_ms,
+        rerank_candidate_k=settings.rag_rerank_candidate_k,
     )
     return cfg
 

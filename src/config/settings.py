@@ -31,6 +31,13 @@ class Settings:
     rag_chunk_overlap: int = 120
     rag_rrf_k: int = 60
     rag_rebuild: bool = False
+    rag_rerank_enabled: bool = False
+    rag_rerank_model: str = "qwen3-rerank"
+    rag_rerank_api_key: str | None = None
+    rag_rerank_endpoint: str = "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
+    rag_rerank_top_n: int = 8
+    rag_rerank_timeout_ms: int = 3000
+    rag_rerank_candidate_k: int = 40
 
 
 def load_settings() -> Settings:
@@ -56,6 +63,28 @@ def load_settings() -> Settings:
     rag_rrf_k = _parse_int("RAG_RRF_K", 60, 1)
     rag_embedding_dimensions = _parse_int("RAG_EMBEDDING_DIMENSIONS", 1024, 128)
 
+    rag_rerank_api_key = (
+    os.getenv("RAG_RERANK_API_KEY", "").strip()
+    or os.getenv("DASHSCOPE_API_KEY", "").strip()
+    or None
+)
+
+# load_settings() 内
+    rag_rerank_enabled = _parse_bool("RAG_RERANK_ENABLED", False)
+    rag_rerank_model = os.getenv("RAG_RERANK_MODEL", "qwen3-rerank").strip() or "qwen3-rerank"
+    rag_rerank_api_key = (
+        os.getenv("RAG_RERANK_API_KEY", "").strip()
+        or os.getenv("DASHSCOPE_API_KEY", "").strip()
+        or None
+    )
+    rag_rerank_endpoint = os.getenv(
+        "RAG_RERANK_ENDPOINT",
+        "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank",
+    ).strip()
+    rag_rerank_top_n = _parse_int("RAG_RERANK_TOP_N", 8, 1)
+    rag_rerank_timeout_ms = _parse_int("RAG_RERANK_TIMEOUT_MS", 3000, 500)
+    rag_rerank_candidate_k = _parse_int("RAG_RERANK_CANDIDATE_K", 40, 5)
+
     return Settings(
         openai_api_key=api_key,
         openai_model=model,
@@ -80,6 +109,13 @@ def load_settings() -> Settings:
         rag_chunk_overlap=rag_chunk_overlap,
         rag_rrf_k=rag_rrf_k,
         rag_rebuild=_parse_bool("RAG_REBUILD", False),
+        rag_rerank_enabled=rag_rerank_enabled,
+        rag_rerank_model=rag_rerank_model,
+        rag_rerank_api_key=rag_rerank_api_key,
+        rag_rerank_endpoint=rag_rerank_endpoint,
+        rag_rerank_top_n=rag_rerank_top_n,
+        rag_rerank_timeout_ms=rag_rerank_timeout_ms,
+        rag_rerank_candidate_k=rag_rerank_candidate_k,
     )
 
 def _parse_bool(name: str, default: bool) -> bool:

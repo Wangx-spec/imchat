@@ -34,7 +34,7 @@ class RAGService:
         self.child_parent: dict[str, str] = {}
         
         self._index_loaded = False
-        self._index_rebuilt = False
+        self._index_rebuilt = True # 默认False
         self._index_meta_match = None  # 可选：True/False/None
         self._index_meta_reason = None
 
@@ -58,7 +58,7 @@ class RAGService:
 
         # Step3: index load/build
         self._index_loaded = False
-        self._index_rebuilt = False
+        self._index_rebuilt = False # 默认False         
         self._index_meta_match = None
         self._index_meta_reason = None
 
@@ -83,6 +83,13 @@ class RAGService:
             parent_map=self.parent_map,
             child_parent=self.child_parent,
             rrf_k=self.cfg.rrf_k,
+            rerank_enabled=self.cfg.rerank_enabled,
+            rerank_model=self.cfg.rerank_model,
+            rerank_api_key=self.cfg.rerank_api_key,
+            rerank_endpoint=self.cfg.rerank_endpoint,
+            rerank_top_n=self.cfg.rerank_top_n,
+            rerank_timeout_ms=self.cfg.rerank_timeout_ms,
+            rerank_candidate_k=self.cfg.rerank_candidate_k,
         )
 
         self.ready = True

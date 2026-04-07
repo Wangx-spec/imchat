@@ -17,6 +17,13 @@ class RAGConfig:
     chunk_size: int = 800
     rrf_k: int = 60
     rebuild: bool = False
+    rerank_enabled: bool = False
+    rerank_model: str = "qwen3-rerank"
+    rerank_api_key: str | None = None
+    rerank_endpoint: str = "https://dashscope.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank"
+    rerank_top_n: int = 8
+    rerank_timeout_ms: int = 3000
+    rerank_candidate_k: int = 40
 
 @dataclass
 class RetrievalResult:
