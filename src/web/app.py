@@ -3,22 +3,20 @@ import logging
 from pathlib import Path
 import sys
 from threading import Lock
-
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-
 # Support running via `python web/app.py` from `src/`.
 if __package__ in {None, ""}:
     src_root = Path(__file__).resolve().parents[1]
     if str(src_root) not in sys.path:
         sys.path.insert(0, str(src_root))
-
 from agents.dialog_agent import build_dialog_runtime
 from config.logging_setup import setup_logging
 from config.settings import load_settings
 from memory.session_memory import ChatSessionMemory
+from rag.bootstrap import bootstrap_rag
 
 
 class ChatRequest(BaseModel):
@@ -102,13 +100,19 @@ def _sse_event(event: str, data: dict) -> str:
 
 
 setup_logging()
-app = FastAPI(title="LangChain Chat UI")
+app = FastAPI(title="Chat UI")
 _settings = load_settings()
 _agent, _runtime = build_dialog_runtime(_settings)
 _memory_map: dict[str, ChatSessionMemory] = {}
 _memory_lock = Lock()
 _index_file = Path(__file__).resolve().parent / "static" / "index.html"
 
+try:
+    _rag_ok, _rag_reason = bootstrap_rag(_settings)
+    logger.info("[RAG_BOOTSTRAP] ok=%s reason=%s", _rag_ok, _rag_reason)
+except Exception as exc:
+    _rag_ok, _rag_reason = False, str(exc)
+    logger.warning("[RAG_BOOTSTRAP] failed=%s", exc)
 
 @app.get("/")
 def index() -> FileResponse:

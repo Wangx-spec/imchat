@@ -4,6 +4,7 @@ import operator as op
 from datetime import datetime
 
 from langchain_core.tools import tool
+from typing import Any
 
 
 _ALLOWED_OPERATORS = {
@@ -17,6 +18,8 @@ _ALLOWED_OPERATORS = {
     ast.UAdd: op.pos,
 }
 logger = logging.getLogger("chat.tools")
+
+_rag_service: Any = None
 
 
 def _safe_eval_expr(expression: str) -> float:
@@ -34,6 +37,42 @@ def _safe_eval_expr(expression: str) -> float:
 
     parsed = ast.parse(expression, mode="eval")
     return _eval(parsed.body)
+
+def set_rag_service(service: Any) -> None:
+    global _rag_service
+    _rag_service = service
+    logger.info("[RAG_BIND] service=%s", type(service).__name__ if service else "None")
+
+def _format_kb_output(answer: str, sources: list[str] | None) -> str:
+    answer_text = (answer or "").strip() or "未检索到有效答案。"
+    lines = [answer_text]
+    if sources:
+        lines.append("")
+        lines.append("来源：")
+        for src in sources[:3]:
+            lines.append(f"- {src}")
+    return "\n".join(lines)
+
+@tool
+def search_knowledge_base(query: str) -> str:
+    """Search local knowledge base and return answer with sources."""
+    q = (query or "").strip()
+    logger.info("[TOOL_CALL] name=search_knowledge_base query=%s", q)
+    if not q:
+        return "请提供要检索的问题。"
+    if _rag_service is None:
+        return "知识检索服务未初始化。"
+    try:
+        result = _rag_service.answer(q)
+        text = _format_kb_output(
+            answer=getattr(result, "answer", ""),
+            sources=getattr(result, "sources", []),
+        )
+        logger.info("[TOOL_RESULT] name=search_knowledge_base ok")
+        return text
+    except Exception as exc:
+        logger.exception("[TOOL_RESULT] name=search_knowledge_base error=%s", exc)
+        return f"知识检索暂时不可用：{exc}"
 
 
 @tool
@@ -66,4 +105,4 @@ def calculate(expression: str) -> str:
 
 
 def get_actions():
-    return [get_current_time, calculate]
+    return [get_current_time, calculate, search_knowledge_base]

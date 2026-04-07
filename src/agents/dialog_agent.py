@@ -2,7 +2,7 @@ import logging
 from typing import Any, Tuple
 
 from langchain.agents import create_agent
-
+from prompts.system_prompts import SYSTEM_PROMPT
 from actions.basic_tools import get_actions
 from config.settings import Settings
 from graphs.dialog_graph import build_dialog_graph
@@ -12,16 +12,14 @@ from llms.openai_chat import build_openai_chat_model
 logger = logging.getLogger("chat.agent")
 
 
+
 def build_dialog_agent_langchain(settings: Settings) -> Any:
     llm = build_openai_chat_model(settings)
     actions = get_actions()
     return create_agent(
         model=llm,
         tools=actions,
-        system_prompt=(
-            "You are a helpful assistant. "
-            "Use tools when needed, especially for math and current time questions."
-        ),
+        system_prompt=SYSTEM_PROMPT,
         debug=settings.verbose,
     )
 

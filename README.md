@@ -106,7 +106,10 @@ uvicorn web.app:app --app-dir src --reload
 ## Web API
 
 - `POST /api/chat`：同步返回完整答案
-- `POST /api/chat/stream`：SSE 流式返回（`chunk/done/error` 事件）
+- `POST /api/chat/stream`：SSE 流式返回
+  - `chunk`：增量文本片段（`{"text": "..."}`）
+  - `done`：最终答案（`{"answer": "..."}`）
+  - `error`：错误信息（`{"detail": "..."}`）
 - `POST /api/reset`：按 `session_id` 清空会话历史
 
 ## 工具与运行时说明
@@ -120,8 +123,11 @@ uvicorn web.app:app --app-dir src --reload
 
 ## RAG 状态说明（重要）
 
-`src/rag/*` 模块和相关 `tmp_step*.py` 脚本已存在，但**当前默认工具列表尚未挂载 RAG 检索工具**。  
-也就是说，当前线上对话链路默认使用的是基础工具（时间/计算）。若要启用 RAG，需要继续接入 `search_knowledge_base` 到工具层与启动链路。
+`src/rag/*` 模块和相关 `tmp_step*.py` 脚本已存在，且工具层已挂载 `search_knowledge_base`。  
+RAG 是否实际可用取决于启动阶段 `bootstrap_rag` 是否成功，以及 `RAG_ENABLED` 配置。
+
+- `RAG_ENABLED=false`：`search_knowledge_base` 会返回“知识检索服务未初始化”降级文案
+- `RAG_ENABLED=true` 且配置正确：工具返回 `answer + sources`
 
 ## 冒烟脚本
 

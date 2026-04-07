@@ -5,6 +5,7 @@ from agents.dialog_agent import build_dialog_runtime
 from config.logging_setup import setup_logging
 from config.settings import load_settings
 from memory.session_memory import ChatSessionMemory
+from rag.bootstrap import bootstrap_rag
 
 
 logger = logging.getLogger("chat.cli")
@@ -93,6 +94,11 @@ def _stream_langgraph(dialog_runner, history) -> tuple[str, list[dict]]:
 def run_chat() -> None:
     setup_logging()
     settings = load_settings()
+    try:
+        ok, reason = bootstrap_rag(settings)
+        logger.info("[RAG_BOOTSTRAP] ok=%s reason=%s", ok, reason)
+    except Exception as exc:
+        logger.warning("[RAG_BOOTSTRAP] failed=%s", exc)
     dialog_runner, runtime = build_dialog_runtime(settings)
     memory = ChatSessionMemory()
 
