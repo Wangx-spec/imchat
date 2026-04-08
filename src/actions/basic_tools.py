@@ -1,11 +1,11 @@
 import ast
-import json
 import logging
 import operator as op
 from datetime import datetime
 
 from langchain_core.tools import tool
-from typing import Any
+
+from actions.knowledge_base_tools import search_knowledge_base, set_rag_service
 
 
 _ALLOWED_OPERATORS = {
@@ -19,31 +19,6 @@ _ALLOWED_OPERATORS = {
     ast.UAdd: op.pos,
 }
 logger = logging.getLogger("chat.tools")
-_rag_service: Any = None
-
-def _build_kb_payload(
-    query: str,
-    ok: bool,
-    answer: str,
-    sources: list[str] | None = None,
-    route: str | None = None,
-    debug: dict[str, Any] | None = None,
-    error: str | None = None
-) -> str:
-    srcs = sources or []
-    payload = {
-        "type": "kb_result",
-        "ok": ok,
-        "query": query,
-        "answer": (answer or "").strip(),
-        "sources": srcs,
-        "citations": [{"id": i + 1, "source": s} for i, s in enumerate(srcs)],
-        "route": route,
-        "debug": debug or {},
-        "error": error,
-    }
-    return json.dumps(payload, ensure_ascii=False)
-
 
 
 def _safe_eval_expr(expression: str) -> float:
@@ -61,76 +36,6 @@ def _safe_eval_expr(expression: str) -> float:
 
     parsed = ast.parse(expression, mode="eval")
     return _eval(parsed.body)
-
-def set_rag_service(service: Any) -> None:
-    global _rag_service
-    _rag_service = service
-    logger.info("[RAG_BIND] service=%s", type(service).__name__ if service else "None")
-
-def _format_kb_output(answer: str, sources: list[str] | None) -> str:
-    answer_text = (answer or "").strip() or "未检索到有效答案。"
-
-    # 如果回答里已经带引用区块，就不再重复追加来源
-    if "参考文档：" in answer_text or "来源：" in answer_text:
-        return answer_text
-
-    lines = [answer_text]
-    if sources:
-        lines.append("")
-        lines.append("来源：")
-        for src in sources[:3]:
-            lines.append(f"- {src}")
-    return "\n".join(lines)
-
-@tool
-def search_knowledge_base(query: str) -> str:
-    """Search local knowledge base and return answer with sources."""
-    q = (query or "").strip()
-    logger.info("[TOOL_CALL] name=search_knowledge_base query=%s", q)
-
-    if not q:
-        return _build_kb_payload(
-            query=q,
-            ok=False,
-            answer="",
-            error="empty_query",
-        )
-    if _rag_service is None:
-        return _build_kb_payload(
-            query=q,
-            ok=False,
-            answer="",
-            error="service_not_initialized",
-        )
-    try:
-        result = _rag_service.answer(q)
-        dbg = getattr(result, "debug", {}) or {}
-        logger.info(
-            "[TOOL_KB_DEBUG] query=%r variant_queries=%s direct_hit_titles=%s exact_match_hit=%s low_confidence_blocked=%s",
-            q,
-            dbg.get("variant_queries", []),
-            dbg.get("direct_hit_titles", []),
-            dbg.get("exact_match_hit", False),
-            dbg.get("low_confidence_blocked", False),
-        )
-        text = _build_kb_payload(
-            query=q,
-            ok=True,
-            answer=getattr(result, "answer", ""),
-            sources=getattr(result, "sources", []),
-            route=getattr(result, "route", None),
-            debug=getattr(result, "debug", {}),
-        )
-        logger.info("[TOOL_RESULT] name=search_knowledge_base ok")
-        return text
-    except Exception as exc:
-        logger.exception("[TOOL_RESULT] name=search_knowledge_base error=%s", exc)
-        return _build_kb_payload(
-            query=q,
-            ok=False,
-            answer="",
-            error=f"tool_exception:{exc}",
-        )
 
 
 @tool

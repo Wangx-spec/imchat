@@ -9,8 +9,9 @@ from rag.data_loader import MarkdownDataLoader
 from rag.chunking import ParentChildChunker
 from rag.index_store import LocalFAISSIndexStore
 from rag.retriever import HybridRetriever
+from rag.query_planner import LLMQueryPlanner, QueryPlan
 from rag.generation_router import GenerationRouter
-
+from prompts.knowledge_base_prompt import build_blocked_answer
 logger = logging.getLogger(__name__)
 
 class RAGService:
@@ -24,6 +25,7 @@ class RAGService:
         self.chunker = ParentChildChunker(self.cfg.chunk_size, self.cfg.chunk_overlap)
         self.index_store = LocalFAISSIndexStore(self.cfg)
         self.router = GenerationRouter()
+        self.query_planner: LLMQueryPlanner | None = None
 
         self.retriever: HybridRetriever | None = None
 
@@ -34,7 +36,7 @@ class RAGService:
         self.child_parent: dict[str, str] = {}
         
         self._index_loaded = False
-        self._index_rebuilt = True # 默认False
+        self._index_rebuilt = False
         self._index_meta_match = None  # 可选：True/False/None
         self._index_meta_reason = None
 
@@ -55,6 +57,21 @@ class RAGService:
         self.children, self.parent_map, self.child_parent = self.chunker.build_parent_child(self.parents)
         if not self.children:
             raise RuntimeError("No child chunks generated")
+
+        if self.cfg.rag_query_plan_api_key:
+            try:
+                self.query_planner = LLMQueryPlanner(
+                    api_key=self.cfg.rag_query_plan_api_key,
+                    base_url=self.cfg.rag_query_plan_base_url,
+                    model=self.cfg.rag_query_plan_model,
+                    timeout_ms=self.cfg.rag_query_plan_timeout_ms,
+                    max_variants=self.cfg.rag_query_plan_max_variants,
+                )
+            except Exception as exc:
+                self.query_planner = None
+                logger.warning("Query planner init failed, fallback to rule query expansion: %s", exc)
+        else:
+            self.query_planner = None
 
         # Step3: index load/build
         self._index_loaded = False
@@ -119,10 +136,14 @@ class RAGService:
                 sources=[],
                 debug={"error": "not_ready"},
             )
+        query_plan: QueryPlan | None = None
+        if self.query_planner is not None:
+            query_plan = self.query_planner.plan(query)
         return self.retriever.hybrid_search(
             query=query,
             retrieval_k=self.cfg.retrieval_k,
             top_k=self.cfg.top_k,
+            query_plan=query_plan,
         )
 
     def answer(self, query: str) -> AnswerResult:
@@ -134,24 +155,35 @@ class RAGService:
             route = self.router.route_query(query)
             rewritten = self.router.rewrite_query(query, route)
             ret = self.retrieve(rewritten)
-            exact_hit = bool((ret.debug or {}).get("exact_match_hit", False))
+            debug = dict(ret.debug or {})
+            confidence_score = float(debug.get("confidence_score", 0.0) or 0.0)
+            is_confident = bool(debug.get("is_confident", False))
+            # 兼容旧检索器：尚未输出新字段时回退到 exact_match_hit
+            if "is_confident" not in debug:
+                is_confident = bool(debug.get("exact_match_hit", False))
 
-            # 低置信度门控：detail 场景没有明确命中时，避免输出“像正确答案”的幻觉内容
-            if route == "detail" and not exact_hit:
+            direct_hit_count = int(debug.get("direct_hit_count", 0) or 0)
+            top_titles = [str(x).lower() for x in (debug.get("top_titles") or [])[:3]]
+            q_norm = str(debug.get("query_normalized", rewritten or query)).lower()
+            semantic_overlap = any(t and (t in q_norm or q_norm in t) for t in top_titles)
+
+            # detail 场景下改为“多证据门控”，不再单点依赖 exact_match_hit
+            confidence_threshold = 0.45
+            has_strong_evidence = is_confident or direct_hit_count > 0 or semantic_overlap
+
+            if route == "detail" and (confidence_score < confidence_threshold) and (not has_strong_evidence):
                 top_sources = ret.sources[:3]
                 source_lines = "\n".join([f"- {s}" for s in top_sources]) if top_sources else "- 无"
-                blocked_answer = (
-                    "我没有在知识库中精确命中到该问题的目标条目，暂时不输出详细步骤，"
-                    "以避免给出不可靠内容。你可以换一个更具体的问法（例如完整菜名/文档标题）。\n\n"
-                    f"当前可参考来源：\n{source_lines}"
-                )
-                debug = dict(ret.debug or {})
+                blocked_answer = build_blocked_answer(source_lines)
                 debug["low_confidence_blocked"] = True
                 logger.info(
-                    "[ANSWER_GUARD] query=%r route=%s exact_match_hit=%s low_confidence_blocked=%s variant_queries=%s direct_hit_titles=%s",
+                    "[ANSWER_GUARD] query=%r route=%s confidence_score=%.3f is_confident=%s direct_hit_count=%s semantic_overlap=%s low_confidence_blocked=%s variant_queries=%s direct_hit_titles=%s",
                     query,
                     route,
-                    exact_hit,
+                    confidence_score,
+                    is_confident,
+                    direct_hit_count,
+                    semantic_overlap,
                     True,
                     debug.get("variant_queries", []),
                     debug.get("direct_hit_titles", []),
@@ -165,13 +197,16 @@ class RAGService:
                 )
 
             logger.info(
-                "[ANSWER_GUARD] query=%r route=%s exact_match_hit=%s low_confidence_blocked=%s variant_queries=%s direct_hit_titles=%s",
+                "[ANSWER_GUARD] query=%r route=%s confidence_score=%.3f is_confident=%s direct_hit_count=%s semantic_overlap=%s low_confidence_blocked=%s variant_queries=%s direct_hit_titles=%s",
                 query,
                 route,
-                exact_hit,
+                confidence_score,
+                is_confident,
+                direct_hit_count,
+                semantic_overlap,
                 False,
-                (ret.debug or {}).get("variant_queries", []),
-                (ret.debug or {}).get("direct_hit_titles", []),
+                debug.get("variant_queries", []),
+                debug.get("direct_hit_titles", []),
             )
             answer_text = self.router.build_answer(query, route, ret.parents)
             return AnswerResult(
@@ -179,7 +214,7 @@ class RAGService:
                 route=route,
                 answer=answer_text,
                 sources=ret.sources,
-                debug=ret.debug,
+                debug=debug,
             )
         except Exception as exc:
             logger.exception("RAG answer failed: %s", exc)

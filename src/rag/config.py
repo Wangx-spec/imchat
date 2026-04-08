@@ -32,6 +32,11 @@ def build_rag_config(settings: Settings) -> RAGConfig:
         rerank_top_n=settings.rag_rerank_top_n,
         rerank_timeout_ms=settings.rag_rerank_timeout_ms,
         rerank_candidate_k=settings.rag_rerank_candidate_k,
+        rag_query_plan_model=settings.rag_query_plan_model,
+        rag_query_plan_api_key=settings.rag_query_plan_api_key,
+        rag_query_plan_base_url=settings.rag_query_plan_base_url,
+        rag_query_plan_timeout_ms=settings.rag_query_plan_timeout_ms,
+        rag_query_plan_max_variants=settings.rag_query_plan_max_variants,
     )
     return cfg
 

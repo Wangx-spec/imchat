@@ -24,6 +24,11 @@ class RAGConfig:
     rerank_top_n: int = 8
     rerank_timeout_ms: int = 3000
     rerank_candidate_k: int = 40
+    rag_query_plan_model: str = "qwen2.5-coder-7b-instruct"
+    rag_query_plan_api_key: str | None = None
+    rag_query_plan_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    rag_query_plan_timeout_ms: int = 2000
+    rag_query_plan_max_variants: int = 5
 
 @dataclass
 class RetrievalResult:

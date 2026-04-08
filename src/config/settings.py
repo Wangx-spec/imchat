@@ -38,6 +38,13 @@ class Settings:
     rag_rerank_top_n: int = 8
     rag_rerank_timeout_ms: int = 3000
     rag_rerank_candidate_k: int = 40
+    rag_force_tool_route: bool = True
+    rag_force_tool_polish: bool = True
+    rag_query_plan_model: str = "qwen2.5-coder-7b-instruct"
+    rag_query_plan_api_key: str | None = None
+    rag_query_plan_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    rag_query_plan_timeout_ms: int = 2000
+    rag_query_plan_max_variants: int = 5
 
 
 def load_settings() -> Settings:
@@ -52,6 +59,8 @@ def load_settings() -> Settings:
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
     base_url = os.getenv("OPENAI_BASE_URL", "").strip() or None
     verbose = os.getenv("AGENT_VERBOSE", "false").lower() in {"1", "true", "yes"}
+    rag_force_tool_route=_parse_bool("RAG_FORCE_TOOL_ROUTE", True)
+    rag_force_tool_polish=_parse_bool("RAG_FORCE_TOOL_POLISH", True)
 
     rag_source_dirs = _normalize_paths(_parse_csv("RAG_SOURCE_DIRS", ""))
     rag_embedding_api_key = _resolve_rag_embedding_api_key()
@@ -63,13 +72,6 @@ def load_settings() -> Settings:
     rag_rrf_k = _parse_int("RAG_RRF_K", 60, 1)
     rag_embedding_dimensions = _parse_int("RAG_EMBEDDING_DIMENSIONS", 1024, 128)
 
-    rag_rerank_api_key = (
-    os.getenv("RAG_RERANK_API_KEY", "").strip()
-    or os.getenv("DASHSCOPE_API_KEY", "").strip()
-    or None
-)
-
-# load_settings() 内
     rag_rerank_enabled = _parse_bool("RAG_RERANK_ENABLED", False)
     rag_rerank_model = os.getenv("RAG_RERANK_MODEL", "qwen3-rerank").strip() or "qwen3-rerank"
     rag_rerank_api_key = (
@@ -84,12 +86,26 @@ def load_settings() -> Settings:
     rag_rerank_top_n = _parse_int("RAG_RERANK_TOP_N", 8, 1)
     rag_rerank_timeout_ms = _parse_int("RAG_RERANK_TIMEOUT_MS", 3000, 500)
     rag_rerank_candidate_k = _parse_int("RAG_RERANK_CANDIDATE_K", 40, 5)
+    rag_query_plan_model = os.getenv("RAG_QUERY_PLAN_MODEL", "qwen2.5-coder-7b-instruct").strip() or "qwen2.5-coder-7b-instruct"
+    rag_query_plan_api_key = (
+        os.getenv("RAG_QUERY_PLAN_API_KEY", "").strip()
+        or os.getenv("DASHSCOPE_API_KEY", "").strip()
+        or None
+    )
+    rag_query_plan_base_url = os.getenv(
+        "RAG_QUERY_PLAN_BASE_URL",
+        "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    ).strip() or "https://dashscope.aliyuncs.com/compatible-mode/v1"
+    rag_query_plan_timeout_ms = _parse_int("RAG_QUERY_PLAN_TIMEOUT_MS", 2000, 500)
+    rag_query_plan_max_variants = _parse_int("RAG_QUERY_PLAN_MAX_VARIANTS", 5, 1)
 
     return Settings(
         openai_api_key=api_key,
         openai_model=model,
         openai_base_url=base_url,
         verbose=verbose,
+        rag_force_tool_route=rag_force_tool_route,
+        rag_force_tool_polish=rag_force_tool_polish,
         agent_runtime=_parse_runtime("AGENT_RUNTIME", "langgraph"),
         agent_streaming=_parse_bool("AGENT_STREAMING", True),
         rag_enabled=_parse_bool("RAG_ENABLED", False),
@@ -116,6 +132,11 @@ def load_settings() -> Settings:
         rag_rerank_top_n=rag_rerank_top_n,
         rag_rerank_timeout_ms=rag_rerank_timeout_ms,
         rag_rerank_candidate_k=rag_rerank_candidate_k,
+        rag_query_plan_model=rag_query_plan_model,
+        rag_query_plan_api_key=rag_query_plan_api_key,
+        rag_query_plan_base_url=rag_query_plan_base_url,
+        rag_query_plan_timeout_ms=rag_query_plan_timeout_ms,
+        rag_query_plan_max_variants=rag_query_plan_max_variants,
     )
 
 def _parse_bool(name: str, default: bool) -> bool:

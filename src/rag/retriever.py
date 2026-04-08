@@ -8,6 +8,8 @@ from langchain_core.documents import Document
 from langchain_community.retrievers import BM25Retriever
 import json
 import urllib.request
+from typing import Any
+from rag.query_planner import QueryPlan
 
 from rag.types import RetrievalResult
 
@@ -30,6 +32,7 @@ class HybridRetriever:
         rerank_timeout_ms: int = 3000,
         rerank_candidate_k: int = 40,
     ) -> None:
+        """初始化混合检索器及其可选的 Qwen 重排参数。"""
         self.vectorstore = vectorstore
         self.children = children
         self.parent_map = parent_map
@@ -50,14 +53,17 @@ class HybridRetriever:
         self.rerank_candidate_k = rerank_candidate_k
 
     def vector_search(self, query: str, k: int) -> list[Document]:
+        """执行向量检索并返回前 k 个子文档。"""
         retriever = self.vectorstore.as_retriever(search_kwargs={"k": k})
         return retriever.invoke(query)
 
     def bm25_search(self, query: str, k: int) -> list[Document]:
+        """执行 BM25 稀疏检索并返回前 k 个子文档。"""
         self.bm25.k = k
         return self.bm25.invoke(query)
 
     def _tokenize_for_sparse(self, text: str) -> list[str]:
+        """为稀疏检索分词：英文词、中文单字和中文双字。"""
         t = (text or "").lower().strip()
         if not t:
             return []
@@ -66,37 +72,135 @@ class HybridRetriever:
         zh = re.findall(r"[\u4e00-\u9fff]", t)
         bigrams = ["".join(zh[i : i + 2]) for i in range(len(zh) - 1)]
         return words + zh + bigrams
-
-    def _expand_queries(self, query: str) -> list[str]:
+    
+    def _variants_from_plan(self, query: str, query_plan: QueryPlan | None) -> list[str]:
+        if query_plan and query_plan.query_variants:
+            out: list[str] = []
+            seen: set[str] = set()
+            for v in query_plan.query_variants:
+                s = (v or "").strip()
+                if s and s not in seen:
+                    seen.add(s)
+                    out.append(s)
+            if out:
+                return out
         q = (query or "").strip()
-        if not q:
+        return [q] if q else []
+    
+    def _fallback_parent_recall(
+        self,
+        terms: list[str],
+        limit: int,
+        min_overlap: int = 1,
+    ) -> list[Document]:
+        if not terms or limit <= 0:
             return []
-        variants = [q]
-        q2 = q
-        remove_phrases = [
-            "是什么", "是什么？", "是什么?", "含义", "定义", "介绍",
-            "怎么制作", "如何制作", "制作方法", "怎么做", "做法", "教程", "步骤", "需要什么",
-            "是什么以及", "以及", "并且", "还有",
-        ]
-        for pat in remove_phrases:
-            q2 = q2.replace(pat, " ")
-        q2 = re.sub(r"[？?！!。,.，；;：:\s]+", " ", q2).strip()
-        if q2 and q2 != q:
-            variants.append(q2)
-            variants.append(f"{q2} 做法")
-            variants.append(f"{q2} 教程")
-            variants.append(f"{q2} 是什么")
-        out: list[str] = []
-        seen: set[str] = set()
-        for v in variants:
-            v = (v or "").strip()
-            if v and v not in seen:
-                seen.add(v)
-                out.append(v)
-        return out[:6]
+        norm_terms = [self._normalize_text(t) for t in terms if self._normalize_text(t)]
+        if not norm_terms:
+            return []
+        scored: list[tuple[float, Document]] = []
+        for p in self.parent_map.values():
+            md = p.metadata or {}
+            hay = self._normalize_text(
+                f"{md.get('title', '')} {md.get('source', '')} {p.page_content[:1200]}"
+            )
+            if not hay:
+                continue
+            hit = sum(1 for t in norm_terms if t and t in hay)
+            if hit < min_overlap:
+                continue
+            # 简单通用分：覆盖率 + 命中数
+            coverage = hit / max(1, len(norm_terms))
+            score = coverage + hit * 0.05
+            scored.append((score, p))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [x[1] for x in scored[:limit]]
 
+    def _score_evidence(
+        self,
+        query: str,
+        query_plan: QueryPlan | None,
+        parents: list[Document],
+        rr_info: dict[str, Any],
+    ) -> tuple[float, bool, list[str], dict[str, Any]]:
+        reasons: list[str] = []
+        details: dict[str, Any] = {}
+
+        if not parents:
+            return 0.0, False, ["no_parent_candidates"], {"term_coverage": 0.0}
+
+        score = 0.0
+        score += 0.20  # 有候选父文档基础分
+        reasons.append("has_parent_candidates")
+
+        top_docs = parents[:3]
+        hay = " ".join(
+            self._normalize_text(
+                f"{(d.metadata or {}).get('title', '')} {(d.metadata or {}).get('source', '')} {d.page_content[:600]}"
+            )
+            for d in top_docs
+        )
+
+        terms: list[str] = []
+        if query_plan:
+            terms.extend(query_plan.core_terms or [])
+            terms.extend(query_plan.entities or [])
+        if not terms:
+            terms = [query]
+
+        norm_terms = [self._normalize_text(t) for t in terms if self._normalize_text(t)]
+        hit_terms = [t for t in norm_terms if t in hay]
+        coverage = len(hit_terms) / max(1, len(norm_terms))
+        details["term_coverage"] = coverage
+        details["term_hits"] = hit_terms[:8]
+
+        # term 覆盖贡献
+        score += min(0.45, coverage * 0.45)
+        if coverage >= 0.5:
+            reasons.append("term_coverage_good")
+        elif coverage > 0:
+            reasons.append("term_coverage_partial")
+        else:
+            reasons.append("term_coverage_none")
+
+        # rerank 贡献（若可用）
+        if rr_info.get("rerank_ok"):
+            raw_scores = rr_info.get("rerank_scores") or []
+            top_rr = float(raw_scores[0]) if raw_scores else 0.0
+            top_rr = max(0.0, min(1.0, top_rr))
+            score += top_rr * 0.30
+            details["top_rerank_score"] = top_rr
+            reasons.append("qwen_rerank_ok")
+        else:
+            reasons.append("qwen_rerank_unavailable")
+
+        # planner 成功微加分
+        if query_plan and query_plan.used_llm and not query_plan.error:
+            score += 0.05
+            reasons.append("query_plan_used_llm")
+
+        score = max(0.0, min(1.0, score))
+        is_confident = score >= 0.45
+        return score, is_confident, reasons, details
+
+    def _normalize_text(self, text: str) -> str:
+        t = (text or "").lower()
+        t = re.sub(r"[^\w\u4e00-\u9fff]+", " ", t)
+        t = re.sub(r"\s+", " ", t).strip()
+        return t
+
+    def _tokenize_generic(self, text: str) -> list[str]:
+        t = self._normalize_text(text)
+        if not t:
+            return []
+        # 英文术语/编号 + 中文单字（可覆盖多领域）
+        words = re.findall(r"[a-z0-9._-]+", t)
+        zh = re.findall(r"[\u4e00-\u9fff]", t)
+        bigrams = ["".join(zh[i:i+2]) for i in range(len(zh) - 1)]
+        return words + zh + bigrams
 
     def _doc_key(self, doc: Document) -> str:
+        """生成子文档去重键，优先使用 child_id。"""
         md = doc.metadata or {}
         cid = md.get("child_id")
         if cid:
@@ -110,6 +214,7 @@ class HybridRetriever:
         return doc.page_content[:100]
 
     def _parent_key(self, doc: Document) -> str:
+        """生成父文档去重键，优先使用 parent_id/source/title。"""
         md = doc.metadata or {}
         pid = str(md.get("parent_id", "")).strip()
         if pid:
@@ -123,6 +228,7 @@ class HybridRetriever:
         return doc.page_content[:120]
 
     def _build_rerank_text(self, p: Document) -> str:
+        """将父文档构造成重排模型可读的文本条目。"""
         md = p.metadata or {}
         title = str(md.get("title", "")).strip()
         source = str(md.get("source", "")).strip()
@@ -130,6 +236,7 @@ class HybridRetriever:
         return f"标题: {title}\n来源: {source}\n内容摘要: {snippet}"
 
     def _call_qwen_rerank(self, query: str, docs: list[str], top_n: int) -> tuple[list[int], list[float]]:
+        """调用 Qwen 重排接口并返回候选索引与相关性分数。"""
         payload = {
             "model": self.rerank_model,
             "input": {"query": query, "documents": docs},
@@ -158,6 +265,7 @@ class HybridRetriever:
         return idxs, scores
     
     def _rerank_parents_by_qwen(self, query: str, parents: list[Document]) -> tuple[list[Document], dict[str, Any]]:
+        """对父文档列表执行 Qwen 重排，失败时回退原顺序并返回状态信息。"""
         info = {"rerank_called": False, "rerank_ok": False, "rerank_error": None, "rerank_scores": []}
 
         if not self.rerank_enabled:
@@ -194,6 +302,7 @@ class HybridRetriever:
             return parents, info
 
     def rrf_fuse(self, vector_docs: list[Document], bm25_docs: list[Document]) -> list[Document]:
+        """使用 RRF 融合向量与 BM25 的子文档排序结果。"""
         scores: dict[str, float] = {}
         doc_by_key: dict[str, Document] = {}
 
@@ -219,6 +328,7 @@ class HybridRetriever:
         return fused
 
     def child_to_parent(self, fused_children: list[Document], top_k: int) -> list[Document]:
+        """将子文档结果映射为父文档并按首次命中顺序截断到 top_k。"""
         parents: list[Document] = []
         seen_parent: set[str] = set()
 
@@ -241,6 +351,7 @@ class HybridRetriever:
         return parents
 
     def _collect_sources(self, parents: list[Document]) -> list[str]:
+        """提取父文档来源字段并保持去重后的顺序。"""
         out: list[str] = []
         seen: set[str] = set()
         for p in parents:
@@ -250,7 +361,8 @@ class HybridRetriever:
                 out.append(s)
         return out
 
-    def _direct_parent_lexical_recall(self, query: str, limit: int) -> list[Document]:
+    def _direct_parent_lexical_recall(self, query: str, limit: int, min_score: float = 2.5) -> list[Document]:
+        """基于标题/来源/内容的词法匹配直接召回父文档。"""
         q = (query or "").strip().lower()
         if not q or limit <= 0:
             return []
@@ -265,24 +377,39 @@ class HybridRetriever:
             snippet = p.page_content[:1200].lower()
 
             score = 0.0
-            if q in title:
-                score += 3.0
-            if q in source:
-                score += 2.0
-            if q in snippet:
-                score += 1.2
 
+            # 强匹配：核心短语
+            if core and len(core) >= 3:
+                if core in title:
+                    score += 4.0
+                if core in source:
+                    score += 3.0
+                if core in snippet:
+                    score += 2.0
+
+            # 弱匹配：完整 query
+            if q in title:
+                score += 1.5
+            if q in source:
+                score += 1.0
+            if q in snippet:
+                score += 0.8
+
+            # token overlap
             d_tokens = set(self._tokenize_for_sparse(f"{title} {source} {snippet[:300]}"))
             overlap = len(q_tokens & d_tokens)
-            score += min(overlap * 0.1, 1.5)
+            score += min(overlap * 0.08, 1.2)
 
-            if score > 0:
+            # 关键：阈值过滤，避免“蚂蚁上树/蒜蓉虾”这类弱相关被拉进来
+            if score >= min_score:
                 hits.append((score, p))
 
         hits.sort(key=lambda x: x[0], reverse=True)
         return [x[1] for x in hits[:limit]]
 
+
     def _merge_unique_parents(self, primary: list[Document], extra: list[Document]) -> list[Document]:
+        """按顺序合并两组父文档并基于父文档键去重。"""
         out: list[Document] = []
         seen: set[str] = set()
         for p in primary + extra:
@@ -293,118 +420,48 @@ class HybridRetriever:
             out.append(p)
         return out
 
-    def _compute_exact_match_hit(self, variants: list[str], parents: list[Document]) -> bool:
-        if not variants or not parents:
+    def _compute_exact_match_hit(
+        self,
+        original_query: str,
+        variants: list[str],
+        core_terms: list[str],
+        parents: list[Document],
+    ) -> bool:
+        """判断候选父文档中是否命中核心实体词。"""
+        if not parents:
             return False
-        candidate_terms: set[str] = set()
-        for v in variants:
-            v = (v or "").strip().lower()
-            if not v:
-                continue
-            # 保留完整短语（如“奥利奥冰淇淋”）
-            if len(v) >= 2:
-                candidate_terms.add(v)
-            # 加入 token（适配中文+英文）
-            for t in self._tokenize_for_sparse(v):
-                t = (t or "").strip().lower()
-                if len(t) >= 2:
-                    candidate_terms.add(t)
-        stop_terms = {
-            "是什么", "怎么做", "做法", "教程", "步骤", "如何", "需要什么",
-            "制作", "怎么制作", "如何制作", "介绍", "定义", "含义",
-        }
-        candidate_terms = {t for t in candidate_terms if t not in stop_terms}
-        if not candidate_terms:
+
+        terms: list[str] = []
+        for t in core_terms:
+            t = (t or "").strip().lower()
+            if len(t) >= 2:
+                terms.append(t)
+
+        if not terms:
             return False
+
         for p in parents:
             md = p.metadata or {}
-            title = str(md.get("title", "")).strip().lower()
-            source = str(md.get("source", "")).strip().lower()
-            source_name = source.replace("\\", "/").split("/")[-1].replace(".md", "")
-            for term in candidate_terms:
-                if term in title or term in source_name or term in source:
+            title = str(md.get("title", "")).lower()
+            source = str(md.get("source", "")).lower()
+            snippet = p.page_content[:800].lower()
+            for t in terms:
+                if t in title or t in source or t in snippet:
                     return True
         return False
 
-    def _extract_query_tokens(self, query: str) -> list[str]:
-        q = (query or "").strip()
-        if not q:
-            return []
+    def hybrid_search(
+        self,
+        query: str,
+        retrieval_k: int,
+        top_k: int,
+        query_plan: QueryPlan | None = None,
+    ) -> RetrievalResult:
+        normalized_query = (query_plan.normalized_query if query_plan else query) or query
+        variants = self._variants_from_plan(normalized_query, query_plan)
 
-        # 去掉常见问句后缀，提取菜名核心词
-        q_norm = q
-        for pat in ["怎么做", "做法", "教程", "需要什么", "如何做", "怎么炒", "怎么煮", "怎么炖", "怎么烤"]:
-            q_norm = q_norm.replace(pat, "")
-        q_norm = re.sub(r"[？?！!。,.，；;：:\s]+", " ", q_norm).strip()
-
-        tokens: list[str] = []
-        if q_norm:
-            tokens.append(q_norm)
-
-        # 兼容“姜葱捞鸡 的做法”这类空格分段
-        for part in q_norm.split(" "):
-            p = part.strip()
-            if len(p) >= 2:
-                tokens.append(p)
-
-        # 去重，长词优先
-        uniq = []
-        seen = set()
-        for t in sorted(tokens, key=len, reverse=True):
-            if t not in seen:
-                seen.add(t)
-                uniq.append(t)
-        return uniq[:6]
-
-    def _score_parent_match(self, parent: Document, tokens: list[str], rank_idx: int) -> float:
-        md = parent.metadata or {}
-        title = str(md.get("title", "")).strip().lower()
-        source = str(md.get("source", "")).strip().lower()
-        source_name = source.replace("\\", "/").split("/")[-1].replace(".md", "")
-
-        score = 0.0
-
-        # 保留少量原始排序信息，避免完全打乱
-        score += max(0.0, 0.05 - rank_idx * 0.005)
-
-        for t in tokens:
-            t_l = t.lower()
-            if not t_l:
-                continue
-
-            if t_l == source_name:
-                score += 2.5
-            if t_l in title:
-                score += 1.8
-            if t_l in source:
-                score += 1.2
-            if title.startswith(t_l):
-                score += 0.5
-            if f"{t_l}的做法" == title:
-                score += 1.0
-
-        return score
-
-    def _rerank_parents_by_query(self, parents: list[Document], query: str) -> tuple[list[Document], list[str], bool]:
-        tokens = self._extract_query_tokens(query)
-        if not parents or not tokens:
-            return parents, tokens, False
-
-        scored = []
-        for i, p in enumerate(parents):
-            s = self._score_parent_match(p, tokens, i)
-            scored.append((s, i, p))
-
-        scored.sort(key=lambda x: (x[0], -x[1]), reverse=True)
-        reranked = [x[2] for x in scored]
-
-        changed = any(a is not b for a, b in zip(parents, reranked))
-        return reranked, tokens, changed
-
-    def hybrid_search(self, query: str, retrieval_k: int, top_k: int) -> RetrievalResult:
-        variants = self._expand_queries(query)
         if not variants:
-            variants = [query]
+            variants = [normalized_query]
 
         k_per = max(8, retrieval_k // max(1, len(variants)))
         all_vector_docs: list[Document] = []
@@ -421,32 +478,45 @@ class HybridRetriever:
         candidate_parent_k = max(top_k * 8, self.rerank_candidate_k, 40)
         parents_from_children = self.child_to_parent(fused_children, top_k=candidate_parent_k)
 
-        direct_hits = self._direct_parent_lexical_recall(query, limit=max(1, candidate_parent_k // 2))
+        # fallback only: 使用 planner 的 terms/entities，不做领域规则
+        fallback_terms: list[str] = []
+        if query_plan:
+            fallback_terms.extend(query_plan.core_terms or [])
+            fallback_terms.extend(query_plan.entities or [])
+        if not fallback_terms:
+            fallback_terms = [normalized_query]
 
-        for v in variants:
-            if v != query:
-                more_hits = self._direct_parent_lexical_recall(v, limit=max(1, candidate_parent_k // 4))
-                direct_hits = self._merge_unique_parents(direct_hits, more_hits)
+        direct_hits = self._fallback_parent_recall(
+            terms=fallback_terms,
+            limit=max(1, candidate_parent_k // 3),
+            min_overlap=1,
+        )
 
         parents = self._merge_unique_parents(parents_from_children, direct_hits)
         candidate_parent_count_before_trim = len(parents)
-        top_titles_before_rerank = [str(p.metadata.get("title", "")) for p in parents[:5]]
-        parents, tokens, rerank_applied = self._rerank_parents_by_query(parents, query)
+        top_titles_before_rerank = [str((p.metadata or {}).get("title", "")) for p in parents[:5]]
 
-        # qwen重排
-        parents, rr_info = self._rerank_parents_by_qwen(query, parents)
+        # 去掉规则重排，仅保留 qwen rerank
+        parents, rr_info = self._rerank_parents_by_qwen(normalized_query, parents)
 
-        exact_match_hit = self._compute_exact_match_hit(variants, parents)
+        confidence_score, is_confident, confidence_reasons, confidence_details = self._score_evidence(
+            query=query,
+            query_plan=query_plan,
+            parents=parents,
+            rr_info=rr_info,
+        )
+
         parents = parents[:top_k]
 
         logger.info(
-            "[RETRIEVE_DEBUG] query=%r variant_queries=%s direct_hit_titles=%s exact_match_hit=%s",
+            "[RETRIEVE_DEBUG] query=%r variants=%s confidence_score=%.3f is_confident=%s",
             query,
             variants,
-            [str(p.metadata.get("title", "")) for p in direct_hits[:5]],
-            exact_match_hit,
+            confidence_score,
+            is_confident,
         )
 
+        # 兼容旧 service：先保留 exact_match_hit（映射为 is_confident）
         return RetrievalResult(
             query=query,
             parents=parents,
@@ -458,20 +528,28 @@ class HybridRetriever:
                 "parent_hits": len(parents),
                 "rrf_k": self.rrf_k,
                 "variant_queries": variants,
-                "query_tokens": tokens,
-                "rerank_applied": rerank_applied,
+                "query_normalized": normalized_query,
+                "query_core_terms": (query_plan.core_terms if query_plan else []),
+                "query_plan_used_llm": bool(query_plan.used_llm) if query_plan else False,
+                "query_plan_error": query_plan.error if query_plan else None,
                 "candidate_parent_k": candidate_parent_k,
                 "candidate_parent_count_before_trim": candidate_parent_count_before_trim,
                 "direct_hit_count": len(direct_hits),
-                "direct_hit_titles": [str(p.metadata.get("title", "")) for p in direct_hits[:5]],
-                "exact_match_hit": exact_match_hit,
+                "direct_hit_titles": [str((p.metadata or {}).get("title", "")) for p in direct_hits[:5]],
                 "top_titles_before_rerank": top_titles_before_rerank,
-                "top_titles": [str(p.metadata.get("title", "")) for p in parents[:3]],
+                "top_titles": [str((p.metadata or {}).get("title", "")) for p in parents[:3]],
                 "qwen_rerank_enabled": self.rerank_enabled,
                 "qwen_rerank_called": rr_info.get("rerank_called", False),
                 "qwen_rerank_ok": rr_info.get("rerank_ok", False),
                 "qwen_rerank_error": rr_info.get("rerank_error"),
                 "qwen_rerank_scores": rr_info.get("rerank_scores", []),
                 "qwen_rerank_model": self.rerank_model,
+                # 新证据判定
+                "confidence_score": confidence_score,
+                "is_confident": is_confident,
+                "confidence_reasons": confidence_reasons,
+                "confidence_details": confidence_details,
+                # 兼容字段（过渡）
+                "exact_match_hit": is_confident,
             },
         )

@@ -17,8 +17,10 @@ from config.logging_setup import setup_logging
 from config.settings import load_settings
 from memory.session_memory import ChatSessionMemory
 from rag.bootstrap import bootstrap_rag
+import re
+from rag.forced_route import should_force_kb, call_kb, build_forced_kb_answer
 
-
+_KB_CLAIM_PAT = re.compile(r"(根据知识库|知识库中|参考文档|来源：|source_dir|\.md)", re.IGNORECASE)
 
 class ChatRequest(BaseModel):
     session_id: str
@@ -99,6 +101,30 @@ def _invoke_chat(history) -> tuple[str, list[dict]]:
 def _sse_event(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
+def _has_kb_tool_call(tool_calls: list[dict]) -> bool:
+    for c in tool_calls:
+        if str(c.get("name", "")).strip() == "search_knowledge_base":
+            return True
+    return False
+
+def _sanitize_ungrounded_kb_claim(answer: str, tool_calls: list[dict]) -> str:
+    text = (answer or "").strip()
+    if not text:
+        return text
+    
+    if _has_kb_tool_call(tool_calls):
+        return text
+    
+    # 未调用 KB 工具，却出现“知识库引用”话术 => 改为非知识库建议
+    if _KB_CLAIM_PAT.search(text):
+        return (
+            "本次回答未调用知识库检索工具，以下内容为通用建议，不能视为知识库结论。\n\n"
+            + re.sub(r"参考文档：[\s\S]*$", "", text).strip()
+        )
+    
+    return text
+
+
 
 setup_logging()
 app = FastAPI(title="Chat UI")
@@ -165,9 +191,22 @@ def chat(payload: ChatRequest) -> ChatResponse:
         history = memory.messages()
     logger.info("[CHAT_REQUEST] session=%s message=%s", session_id, message)
 
+    if _settings.rag_force_tool_route and should_force_kb(message):
+        kb = call_kb(message)
+        answer = build_forced_kb_answer(message, kb, _settings)
+        with _memory_lock:
+            memory.append_assistant(answer)
+        logger.info(
+            "[FORCED_KB] session=%s forced=True ok=%s error=%s",
+            session_id, kb.get("ok"), kb.get("error")
+        )
+        logger.info("[CHAT_RESULT] session=%s answer=%s", session_id, answer)
+        return ChatResponse(answer=answer)
+
     try:
         answer, tool_calls = _invoke_chat(history)
         _log_tool_calls(session_id, tool_calls)
+        answer = _sanitize_ungrounded_kb_claim(answer, tool_calls)
     except Exception as exc:
         logger.exception("[CHAT_ERROR] session=%s error=%s", session_id, exc)
         raise HTTPException(status_code=500, detail=f"Agent error: {exc}") from exc
@@ -193,6 +232,7 @@ def chat_stream(payload: ChatRequest) -> StreamingResponse:
         memory = _memory_map.setdefault(session_id, ChatSessionMemory())
         memory.append_user(message)
         history = memory.messages()
+        
     logger.info("[CHAT_STREAM_REQUEST] session=%s message=%s", session_id, message)
 
     def event_generator():
@@ -201,6 +241,19 @@ def chat_stream(payload: ChatRequest) -> StreamingResponse:
         collected_tool_calls: list[dict] = []
 
         try:
+            if _settings.rag_force_tool_route and should_force_kb(message):
+                kb = call_kb(message)
+                forced_answer = build_forced_kb_answer(message, kb, _settings)
+                logger.info(
+                    "[FORCED_KB] session=%s forced=True ok=%s error=%s",
+                    session_id, kb.get("ok"), kb.get("error")
+                )
+                yield _sse_event("chunk", {"text": forced_answer})
+                yield _sse_event("done", {"answer": forced_answer})
+                with _memory_lock:
+                    memory.append_assistant(forced_answer)
+                logger.info("[CHAT_RESULT] session=%s answer=%s", session_id, forced_answer)
+                return
             if _runtime == "langgraph" and _settings.agent_streaming:
                 for update in _agent.stream({"messages": history}, stream_mode="updates"):
                     if not isinstance(update, dict):
@@ -232,6 +285,7 @@ def chat_stream(payload: ChatRequest) -> StreamingResponse:
                 yield _sse_event("chunk", {"text": latest_answer})
 
             _log_tool_calls(session_id, collected_tool_calls)
+            latest_answer = _sanitize_ungrounded_kb_claim(latest_answer, collected_tool_calls)
             yield _sse_event("done", {"answer": latest_answer})
         except Exception as exc:
             logger.exception("[CHAT_STREAM_ERROR] session=%s error=%s", session_id, exc)

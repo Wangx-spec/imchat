@@ -1,6 +1,6 @@
 import logging
 
-from actions.basic_tools import set_rag_service
+from actions.knowledge_base_tools import set_rag_service
 from config.settings import Settings
 from rag.config import build_rag_config, sanitize_rag_config, validate_rag_config
 from rag.service import RAGService
