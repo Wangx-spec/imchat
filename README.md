@@ -1,75 +1,71 @@
-# imchat：LangGraph/LangChain 双运行时对话项目
+# imchat：带 RAG 与 LangGraph 记忆的对话系统
 
-`imchat` 是一个 Python 对话应用，支持 CLI 与 Web 两种入口，当前以 `LangGraph` 为默认运行时，并保留 `LangChain` 回退能力。
+`imchat` 是一个 Python 对话应用，支持 CLI 与 Web 两个入口。  
+当前默认运行时为 `LangGraph`，并保留 `LangChain` 作为回退路径。
 
-## 当前能力概览
+## 当前能力
 
-- 双运行时：`LangGraph`（默认）与 `LangChain`（兼容回退）
-- 多轮会话记忆：基于 `langchain_core.messages` 的内存消息列表
-- 工具调用：当前时间、数学表达式计算
-- Web 对话接口：同步接口 + SSE 流式接口
-- 可扩展 RAG 模块：`src/rag/*` 已具备独立实现与冒烟脚本
+- 双运行时：`LangGraph`（默认）+ `LangChain`（fallback）
+- 工具调用：`search_knowledge_base`、`get_current_time`、`calculate`
+- RAG 全链路：文档扫描 -> 切分 -> FAISS 索引 -> 混合检索 -> 证据门控 -> 引用输出
+- 防“知识库型幻觉”：未调用 KB 工具时禁止冒充知识库答案
+- LangGraph 原生短期记忆：`checkpointer + thread_id(session_id)`
+- Web API：同步 + SSE 流式
 
 ## 技术栈
 
 - Python 3.10+
-- LLM 框架：`langgraph`、`langchain`、`langchain-openai`
-- Web：`FastAPI` + `uvicorn`
+- Agent/LLM：`langgraph`、`langchain`、`langchain-openai`
+- Web：`fastapi`、`uvicorn`
 - 配置：`python-dotenv`
-- RAG（模块级）：`langchain-community`、`faiss-cpu`、`rank_bm25`
+- RAG：`faiss-cpu`、`langchain-community`、`rank_bm25`
 
-## 架构与数据流
+## 核心流程
 
 ```mermaid
-flowchart LR
-userInput[UserInput] --> entry[CLI_or_Web]
-entry --> memory[ChatSessionMemory]
-memory --> runtime[build_dialog_runtime]
-runtime --> lg[LangGraph_ReAct]
-runtime --> lc[LangChain_Agent]
-lg --> tools[actions_basic_tools]
-lc --> tools
-lg --> model[ChatOpenAI]
-lc --> model
-lg --> sse[Web_SSE_or_CLI_Stream]
-sse --> entry
-entry --> memory
+flowchart TD
+    A[Markdown 文档放入 RAG_SOURCE_DIRS] --> B[bootstrap_rag 初始化 RAGService]
+    B --> C[加载父文档并切分 child chunks]
+    C --> D{索引文件存在且 meta 匹配?}
+    D -- 是 --> E[加载 FAISS 索引]
+    D -- 否 --> F[重建索引并保存 index.meta.json]
+    E --> G[用户请求进入 LangGraph Agent]
+    F --> G
+    G --> H[需要知识库时调用 search_knowledge_base]
+    H --> I[Query Planner + HybridRetriever]
+    I --> J[证据门控 + 生成答案 + 参考文档]
+    J --> K[checkpointer 按 thread_id 写入短期记忆]
 ```
 
-## 目录结构（按职责）
+## 目录结构
 
 ```text
-imchat/
-├─ src/
-│  ├─ actions/           # 工具定义（time/calculate）
-│  ├─ agents/            # 运行时分流与 Agent 组装
-│  ├─ graphs/            # LangGraph 组装
-│  ├─ llms/              # 模型初始化（ChatOpenAI）
-│  ├─ memory/            # 会话记忆（BaseMessage）
-│  ├─ config/            # 配置与日志
-│  ├─ rag/               # RAG 模块实现
-│  ├─ tests/             # 冒烟脚本
-│  ├─ main.py            # CLI 入口
-│  └─ web/               # FastAPI 与静态页面
-├─ docs/                 # 设计与实施文档
-├─ .env.example
-├─ requirements.txt
-└─ README.md
+src/
+├─ actions/        # 工具定义（KB/时间/计算）
+├─ agents/         # 运行时分流
+├─ graphs/         # LangGraph 组装（含 checkpointer）
+├─ rag/            # RAG 主流程（加载/切分/索引/检索/生成）
+├─ prompts/        # 系统提示词与 KB 约束
+├─ config/         # 配置加载
+├─ web/            # FastAPI 接口
+└─ main.py         # CLI 入口
+docs/
+└─ kb-end-to-end-tech-flow.md
 ```
 
-## 运行前准备
+## 快速开始
 
 ### 1) 安装依赖
 
 ```bash
 python -m venv .venv
-.venv\Scripts\activate
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2) 配置环境变量
+### 2) 创建 `.env`
 
-复制 `.env.example` 为 `.env`，至少配置：
+项目当前未提供 `.env.example`，请在仓库根目录手动创建 `.env`，最少包含：
 
 ```env
 OPENAI_API_KEY=your_api_key
@@ -78,65 +74,74 @@ OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 
 AGENT_RUNTIME=langgraph
 AGENT_STREAMING=true
+AGENT_USE_LANGGRAPH_MEMORY=true
 AGENT_VERBOSE=false
+
+RAG_ENABLED=true
+RAG_SOURCE_DIRS=/absolute/path/to/your/markdown/dir
+RAG_INDEX_DIR=data/rag_index
 ```
 
-常用开关：
+### 3) 启动
 
-- `AGENT_RUNTIME`：`langgraph` 或 `langchain`
-- `AGENT_STREAMING`：是否启用流式（CLI + Web 流式路径）
-- `LOG_LEVEL`：日志级别（`DEBUG/INFO/WARNING/ERROR`）
-
-## 启动方式
-
-### CLI
+CLI：
 
 ```bash
 python src/main.py
 ```
 
-### Web
+Web：
 
 ```bash
 uvicorn web.app:app --app-dir src --reload
 ```
 
-打开浏览器：`http://127.0.0.1:8000`
+访问：`http://127.0.0.1:8000`
+
+## 配置说明（重点）
+
+运行时相关：
+
+- `AGENT_RUNTIME`：`langgraph` / `langchain`
+- `AGENT_STREAMING`：是否启用流式返回
+- `AGENT_USE_LANGGRAPH_MEMORY`：LangGraph 记忆开关（默认 `true`）
+- `AGENT_VERBOSE`：调试日志
+
+RAG 必要项：
+
+- `RAG_ENABLED`：是否启用 RAG
+- `RAG_SOURCE_DIRS`：逗号分隔的 markdown 根目录
+- `RAG_INDEX_DIR`：FAISS 索引目录
+- `RAG_REBUILD`：`true` 时强制重建索引
+
+RAG 召回/排序可调项：
+
+- `RAG_TOP_K`、`RAG_RETRIEVAL_K`、`RAG_RRF_K`
+- `RAG_RERANK_ENABLED` 及相关 `RAG_RERANK_*`
+- `RAG_QUERY_PLAN_*`（query planner 模型、超时、变体数）
+
+> 已废弃并移除：`RAG_FORCE_TOOL_ROUTE`、`RAG_FORCE_TOOL_POLISH`
 
 ## Web API
 
-- `POST /api/chat`：同步返回完整答案
+- `POST /api/chat`：同步返回
 - `POST /api/chat/stream`：SSE 流式返回
-  - `chunk`：增量文本片段（`{"text": "..."}`）
-  - `done`：最终答案（`{"answer": "..."}`）
-  - `error`：错误信息（`{"detail": "..."}`）
-- `POST /api/reset`：按 `session_id` 清空会话历史
+  - `chunk`：`{"text":"..."}`
+  - `done`：`{"answer":"..."}`
+  - `error`：`{"detail":"..."}`
+- `POST /api/reset`：兼容接口（当前建议通过更换 `session_id` 进行“重置会话”）
+- `GET /health`：运行健康与 RAG 启动状态
 
-## 工具与运行时说明
+## 运行机制补充
 
-- 工具定义在 `src/actions/basic_tools.py`
-  - `get_current_time`
-  - `calculate`
-- 运行时分流在 `src/agents/dialog_agent.py`
-  - `AGENT_RUNTIME=langgraph`：优先 `src/graphs/dialog_graph.py`
-  - LangGraph 初始化失败时自动回退 `LangChain`
-
-## RAG 状态说明（重要）
-
-`src/rag/*` 模块和相关 `tmp_step*.py` 脚本已存在，且工具层已挂载 `search_knowledge_base`。  
-RAG 是否实际可用取决于启动阶段 `bootstrap_rag` 是否成功，以及 `RAG_ENABLED` 配置。
-
-- `RAG_ENABLED=false`：`search_knowledge_base` 会返回“知识检索服务未初始化”降级文案
-- `RAG_ENABLED=true` 且配置正确：工具返回 `answer + sources`
-
-## 冒烟脚本
-
-- `src/tests/tmp_langgraph_smoke.py`：运行时基础冒烟
-- `src/tests/tmp_step1_smoke.py` ~ `tmp_step4_smoke.py`：RAG 分阶段冒烟
-- `src/tests/tmp_validate_kungpao.py`：RAG 检索命中验证
+- `search_knowledge_base` 在 `src/actions/knowledge_base_tools.py` 中返回结构化 payload；
+- `bootstrap_rag` 成功后会将 `RAGService` 绑定到工具层；
+- `src/web/app.py` / `src/main.py` 均以 `thread_id=session_id` 调用 agent；
+- `src/graphs/dialog_graph.py` 使用 `MemorySaver` 作为 checkpointer（进程内记忆，重启丢失）。
 
 ## 常见问题
 
-- 启动时报 `Missing OPENAI_API_KEY`：检查 `.env` 是否在项目根目录且变量名正确。
-- Web 没有流式效果：确认 `AGENT_RUNTIME=langgraph` 且 `AGENT_STREAMING=true`。
-- 模型请求失败：优先检查 `OPENAI_BASE_URL`、代理网络、以及 API Key 可用性。
+- `Missing OPENAI_API_KEY`：确认 `.env` 在仓库根目录，且变量名正确。
+- RAG 未生效：检查 `RAG_ENABLED=true`、`RAG_SOURCE_DIRS` 是否可读、启动日志中 `bootstrap_rag` 状态。
+- 有文档但检索不到：检查索引目录下 `index.meta.json` 是否与当前数据/配置一致；必要时设置 `RAG_REBUILD=true` 重建。
+- 回答声称“根据知识库”但不可信：查看日志里是否存在 `search_knowledge_base` tool call；系统已内置未调用时的防幻觉降级处理。
