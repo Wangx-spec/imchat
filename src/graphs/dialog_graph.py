@@ -1,13 +1,15 @@
 from typing import Any
-
+from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
-from prompts.system_prompts import SYSTEM_PROMPT
 from actions.basic_tools import get_actions
 from config.settings import Settings
 from llms.openai_chat import build_openai_chat_model
+from prompts.system_prompts import SYSTEM_PROMPT
 
 
-
+# 进程内短期记忆（按 thread_id 分桶）
+# 注意：服务重启后会丢失
+_CHECKPOINTER = MemorySaver()
 
 def build_dialog_graph(settings: Settings) -> Any:
     llm = build_openai_chat_model(settings)
@@ -17,4 +19,5 @@ def build_dialog_graph(settings: Settings) -> Any:
         tools=actions,
         prompt=SYSTEM_PROMPT,
         debug=settings.verbose,
+        checkpointer=_CHECKPOINTER
     )

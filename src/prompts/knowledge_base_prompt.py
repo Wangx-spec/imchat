@@ -43,20 +43,6 @@ def build_query_prompt(query: str, max_variants: int) -> str:
         "}"
     )
 
-FORCED_ROUTE_POLISH_PROMPT = (
-    "你是知识库答案润色器。"
-    "你只能基于提供的知识库内容进行改写，不得新增事实、菜名、步骤、来源。"
-    "输出必须与用户问题同语言。"
-    + KB_GROUNDING_RULES
-)
-def build_forced_route_polish_input(query: str, kb_payload: str) -> str:
-    return (
-        f"{FORCED_ROUTE_POLISH_PROMPT}\n\n"
-        f"用户问题：{query}\n"
-        f"知识库返回(JSON)：{kb_payload}\n\n"
-        "请输出最终用户可读答案。"
-    )
-
 BLOCKED_ANSWER = (
     "我没有在知识库中形成足够可信的证据链，暂时不输出详细步骤，"
     "为避免给出不可靠内容。你可以换一个更具体的问法（例如完整标题、别名或关键实体）。\n\n"

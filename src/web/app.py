@@ -2,7 +2,6 @@ import json
 import logging
 from pathlib import Path
 import sys
-from threading import Lock
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from fastapi.responses import StreamingResponse
@@ -15,10 +14,8 @@ if __package__ in {None, ""}:
 from agents.dialog_agent import build_dialog_runtime
 from config.logging_setup import setup_logging
 from config.settings import load_settings
-from memory.session_memory import ChatSessionMemory
 from rag.bootstrap import bootstrap_rag
 import re
-from rag.forced_route import should_force_kb, call_kb, build_forced_kb_answer
 
 _KB_CLAIM_PAT = re.compile(r"(根据知识库|知识库中|参考文档|来源：|source_dir|\.md)", re.IGNORECASE)
 
@@ -93,8 +90,11 @@ def _log_tool_calls(session_id: str, tool_calls: list[dict]) -> None:
         logger.info("[TOOL_SKIP] session=%s no tool call in this turn", session_id)
 
 
-def _invoke_chat(history) -> tuple[str, list[dict]]:
-    result = _agent.invoke({"messages": history})
+def _invoke_chat(session_id: str, message: str) -> tuple[str, list[dict]]:
+    result = _agent.invoke(
+        {"messages": [("user", message)]},
+        config={"configurable": {"thread_id": session_id}},
+    )
     return _extract_text_from_result(result), _extract_tool_calls(result)
 
 
@@ -130,8 +130,6 @@ setup_logging()
 app = FastAPI(title="Chat UI")
 _settings = load_settings()
 _agent, _runtime = build_dialog_runtime(_settings)
-_memory_map: dict[str, ChatSessionMemory] = {}
-_memory_lock = Lock()
 _index_file = Path(__file__).resolve().parent / "static" / "index.html"
 # module globals
 _rag_ok = False
@@ -185,34 +183,14 @@ def chat(payload: ChatRequest) -> ChatResponse:
     if not message:
         raise HTTPException(status_code=400, detail="message cannot be empty")
 
-    with _memory_lock:
-        memory = _memory_map.setdefault(session_id, ChatSessionMemory())
-        memory.append_user(message)
-        history = memory.messages()
-    logger.info("[CHAT_REQUEST] session=%s message=%s", session_id, message)
-
-    if _settings.rag_force_tool_route and should_force_kb(message):
-        kb = call_kb(message)
-        answer = build_forced_kb_answer(message, kb, _settings)
-        with _memory_lock:
-            memory.append_assistant(answer)
-        logger.info(
-            "[FORCED_KB] session=%s forced=True ok=%s error=%s",
-            session_id, kb.get("ok"), kb.get("error")
-        )
-        logger.info("[CHAT_RESULT] session=%s answer=%s", session_id, answer)
-        return ChatResponse(answer=answer)
-
     try:
-        answer, tool_calls = _invoke_chat(history)
+        answer, tool_calls = _invoke_chat(session_id, message)
         _log_tool_calls(session_id, tool_calls)
         answer = _sanitize_ungrounded_kb_claim(answer, tool_calls)
     except Exception as exc:
         logger.exception("[CHAT_ERROR] session=%s error=%s", session_id, exc)
         raise HTTPException(status_code=500, detail=f"Agent error: {exc}") from exc
 
-    with _memory_lock:
-        memory.append_assistant(answer)
     logger.info("[CHAT_RESULT] session=%s answer=%s", session_id, answer)
 
     return ChatResponse(answer=answer)
@@ -228,11 +206,6 @@ def chat_stream(payload: ChatRequest) -> StreamingResponse:
     if not message:
         raise HTTPException(status_code=400, detail="message cannot be empty")
 
-    with _memory_lock:
-        memory = _memory_map.setdefault(session_id, ChatSessionMemory())
-        memory.append_user(message)
-        history = memory.messages()
-        
     logger.info("[CHAT_STREAM_REQUEST] session=%s message=%s", session_id, message)
 
     def event_generator():
@@ -241,21 +214,12 @@ def chat_stream(payload: ChatRequest) -> StreamingResponse:
         collected_tool_calls: list[dict] = []
 
         try:
-            if _settings.rag_force_tool_route and should_force_kb(message):
-                kb = call_kb(message)
-                forced_answer = build_forced_kb_answer(message, kb, _settings)
-                logger.info(
-                    "[FORCED_KB] session=%s forced=True ok=%s error=%s",
-                    session_id, kb.get("ok"), kb.get("error")
-                )
-                yield _sse_event("chunk", {"text": forced_answer})
-                yield _sse_event("done", {"answer": forced_answer})
-                with _memory_lock:
-                    memory.append_assistant(forced_answer)
-                logger.info("[CHAT_RESULT] session=%s answer=%s", session_id, forced_answer)
-                return
             if _runtime == "langgraph" and _settings.agent_streaming:
-                for update in _agent.stream({"messages": history}, stream_mode="updates"):
+                for update in _agent.stream(
+                    {"messages": [("user", message)]}, 
+                    config={"configurable": {"thread_id": session_id}},
+                    stream_mode="updates"
+                    ):
                     if not isinstance(update, dict):
                         continue
                     for node_state in update.values():
@@ -278,10 +242,10 @@ def chat_stream(payload: ChatRequest) -> StreamingResponse:
                                         yield _sse_event("chunk", {"text": delta})
 
                 if not latest_answer:
-                    latest_answer, collected_tool_calls = _invoke_chat(history)
+                    latest_answer, collected_tool_calls = _invoke_chat(session_id, message)
                     yield _sse_event("chunk", {"text": latest_answer})
             else:
-                latest_answer, collected_tool_calls = _invoke_chat(history)
+                latest_answer, collected_tool_calls = _invoke_chat(session_id, message)
                 yield _sse_event("chunk", {"text": latest_answer})
 
             _log_tool_calls(session_id, collected_tool_calls)
@@ -292,8 +256,6 @@ def chat_stream(payload: ChatRequest) -> StreamingResponse:
             yield _sse_event("error", {"detail": str(exc)})
         finally:
             if latest_answer:
-                with _memory_lock:
-                    memory.append_assistant(latest_answer)
                 logger.info("[CHAT_RESULT] session=%s answer=%s", session_id, latest_answer)
 
     return StreamingResponse(event_generator(), media_type="text/event-stream")
@@ -305,9 +267,10 @@ def reset(payload: ResetRequest) -> dict:
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id is required")
 
-    with _memory_lock:
-        _memory_map.pop(session_id, None)
-    logger.info("[CHAT_RESET] session=%s", session_id)
+    logger.info(
+        "[CHAT_RESET] session=%s note=langgraph_checkpointer_in_use;reset_by_new_session_id",
+        session_id,
+    )
 
     return {"ok": True}
 

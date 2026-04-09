@@ -17,6 +17,7 @@ class Settings:
     verbose: bool = False
     agent_runtime: str = "langgraph"
     agent_streaming: bool = True
+    agent_use_langgraph_memory: bool = True
     rag_enabled: bool = False
     rag_source_dirs: list[str] = field(default_factory=list)
     rag_index_dir: str = "data/rag_index"
@@ -38,8 +39,6 @@ class Settings:
     rag_rerank_top_n: int = 8
     rag_rerank_timeout_ms: int = 3000
     rag_rerank_candidate_k: int = 40
-    rag_force_tool_route: bool = True
-    rag_force_tool_polish: bool = True
     rag_query_plan_model: str = "qwen2.5-coder-7b-instruct"
     rag_query_plan_api_key: str | None = None
     rag_query_plan_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
@@ -59,8 +58,7 @@ def load_settings() -> Settings:
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
     base_url = os.getenv("OPENAI_BASE_URL", "").strip() or None
     verbose = os.getenv("AGENT_VERBOSE", "false").lower() in {"1", "true", "yes"}
-    rag_force_tool_route=_parse_bool("RAG_FORCE_TOOL_ROUTE", True)
-    rag_force_tool_polish=_parse_bool("RAG_FORCE_TOOL_POLISH", True)
+    agent_use_langgraph_memory = _parse_bool("AGENT_USE_LANGGRAPH_MEMORY", True)
 
     rag_source_dirs = _normalize_paths(_parse_csv("RAG_SOURCE_DIRS", ""))
     rag_embedding_api_key = _resolve_rag_embedding_api_key()
@@ -104,10 +102,9 @@ def load_settings() -> Settings:
         openai_model=model,
         openai_base_url=base_url,
         verbose=verbose,
-        rag_force_tool_route=rag_force_tool_route,
-        rag_force_tool_polish=rag_force_tool_polish,
         agent_runtime=_parse_runtime("AGENT_RUNTIME", "langgraph"),
         agent_streaming=_parse_bool("AGENT_STREAMING", True),
+        agent_use_langgraph_memory=agent_use_langgraph_memory,
         rag_enabled=_parse_bool("RAG_ENABLED", False),
         rag_source_dirs=rag_source_dirs,
         rag_index_dir=os.getenv("RAG_INDEX_DIR", "data/rag_index").strip() or "data/rag_index",

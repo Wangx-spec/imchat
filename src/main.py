@@ -4,7 +4,6 @@ import logging
 from agents.dialog_agent import build_dialog_runtime
 from config.logging_setup import setup_logging
 from config.settings import load_settings
-from memory.session_memory import ChatSessionMemory
 from rag.bootstrap import bootstrap_rag
 
 
@@ -66,12 +65,16 @@ def _log_tool_calls(tool_calls: list[dict]) -> None:
         logger.info("[TOOL_SKIP] no tool call in this turn")
 
 
-def _stream_langgraph(dialog_runner, history) -> tuple[str, list[dict]]:
+def _stream_langgraph(dialog_runner, session_id: str, message: str) -> tuple[str, list[dict]]:
     latest_answer = ""
     seen_answer = ""
     collected_tool_calls: list[dict] = []
 
-    for update in dialog_runner.stream({"messages": history}, stream_mode="updates"):
+    for update in dialog_runner.stream(
+        {"messages": [("user", message)]},
+        config={"configurable": {"thread_id": session_id}},
+        stream_mode="updates",
+    ):
         if not isinstance(update, dict):
             continue
         for node_state in update.values():
@@ -108,7 +111,7 @@ def run_chat() -> None:
         logger.info("rag_bootstrap_skipped reason=disabled")
 
     dialog_runner, runtime = build_dialog_runtime(settings)
-    memory = ChatSessionMemory()
+    session_id = "cli-default"
 
     print(f"Chat runtime: {runtime}. Type 'exit' or 'quit' to stop.")
     while True:
@@ -120,25 +123,27 @@ def run_chat() -> None:
             continue
 
         try:
-            memory.append_user(user_input)
-            history = memory.messages()
-
             answer = ""
             tool_calls: list[dict] = []
             if runtime == "langgraph" and settings.agent_streaming:
-                answer, tool_calls = _stream_langgraph(dialog_runner, history)
+                answer, tool_calls = _stream_langgraph(dialog_runner, session_id, user_input)
                 if not answer:
                     # Safety fallback for providers that do not return updates content.
-                    result = dialog_runner.invoke({"messages": history})
+                    result = dialog_runner.invoke(
+                        {"messages": [("user", user_input)]},
+                        config={"configurable": {"thread_id": session_id}},
+                    )
                     tool_calls = _extract_tool_calls(result)
                     answer = _extract_text_from_result(result)
             else:
-                result = dialog_runner.invoke({"messages": history})
+                result = dialog_runner.invoke(
+                    {"messages": [("user", user_input)]},
+                    config={"configurable": {"thread_id": session_id}},
+                )
                 tool_calls = _extract_tool_calls(result)
                 answer = _extract_text_from_result(result)
 
             _log_tool_calls(tool_calls)
-            memory.append_assistant(answer)
             logger.info("[CHAT_RESULT] answer=%s", answer)
             if runtime != "langgraph" or not settings.agent_streaming:
                 print(f"Assistant: {answer}")
