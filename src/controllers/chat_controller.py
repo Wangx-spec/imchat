@@ -11,8 +11,14 @@ import logging
 
 logger = logging.getLogger("chat.web")
 
-router = APIRouter(prefix="/api", tags=["chat"])
+from db.conversations import (
+    create_conversation,
+    list_conversations,
+    update_conversation,
+)
+import uuid
 
+router = APIRouter(prefix="/api", tags=["chat"])
 
 class ChatRequest(BaseModel):
     session_id: str
@@ -24,6 +30,8 @@ class ChatResponse(BaseModel):
 class ResetRequest(BaseModel):
     session_id: str
 
+class NewConversationResponse(BaseModel):
+    session_id: str
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -69,8 +77,17 @@ def reset(payload: ResetRequest) -> dict:
     session_id = payload.session_id.strip()
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id is required")
-    logger.info(
-        "[CHAT_RESET] session=%s note=langgraph_checkpointer_in_use;reset_by_new_session_id",
-        session_id,
-    )
-    return {"ok": True}
+    new_id = str(uuid.uuid4())
+    create_conversation(new_id)
+    logger.info("[CHAT_RESET] old=%s new=%s", session_id, new_id)
+    return {"ok": True, "new_session_id": new_id}
+
+@router.post("/conversations", response_model=NewConversationResponse)
+def new_conversation() -> NewConversationResponse:
+    session_id = str(uuid.uuid4())
+    create_conversation(session_id)
+    return NewConversationResponse(session_id=session_id)
+
+@router.get("/conversations")
+def get_conversations() -> list[dict]:
+    return list_conversations()

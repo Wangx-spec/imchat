@@ -44,6 +44,7 @@ class Settings:
     rag_query_plan_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     rag_query_plan_timeout_ms: int = 2000
     rag_query_plan_max_variants: int = 5
+    postgres_uri: str | None = None
 
 
 def load_settings() -> Settings:
@@ -97,6 +98,8 @@ def load_settings() -> Settings:
     rag_query_plan_timeout_ms = _parse_int("RAG_QUERY_PLAN_TIMEOUT_MS", 2000, 500)
     rag_query_plan_max_variants = _parse_int("RAG_QUERY_PLAN_MAX_VARIANTS", 5, 1)
 
+    postgres_uri = os.getenv("POSTGRES_URI", "").strip() or None
+
     return Settings(
         openai_api_key=api_key,
         openai_model=model,
@@ -134,6 +137,7 @@ def load_settings() -> Settings:
         rag_query_plan_base_url=rag_query_plan_base_url,
         rag_query_plan_timeout_ms=rag_query_plan_timeout_ms,
         rag_query_plan_max_variants=rag_query_plan_max_variants,
+        postgres_uri=postgres_uri,
     )
 
 def _parse_bool(name: str, default: bool) -> bool:

@@ -1,9 +1,12 @@
 import json
 import logging
+import uuid
 
 from agents.dialog_agent import build_dialog_runtime
 from config.logging_setup import setup_logging
 from config.settings import load_settings
+from db.connection import init_postgres_pool
+from db.conversations import create_conversation, list_conversations
 from rag.bootstrap import bootstrap_rag
 
 
@@ -98,6 +101,9 @@ def run_chat() -> None:
     setup_logging()
     settings = load_settings()
 
+    if settings.postgres_uri:
+        init_postgres_pool(settings.postgres_uri)
+
     if settings.rag_enabled:
         try:
             ok, reason = bootstrap_rag(settings)
@@ -111,14 +117,27 @@ def run_chat() -> None:
         logger.info("rag_bootstrap_skipped reason=disabled")
 
     dialog_runner, runtime = build_dialog_runtime(settings)
-    session_id = "cli-default"
 
-    print(f"Chat runtime: {runtime}. Type 'exit' or 'quit' to stop.")
+    session_id = str(uuid.uuid4())
+    create_conversation(session_id)
+
+    print(f"Chat runtime: {runtime}. Session: {session_id[:8]}...")
+    print("Commands: /new (new chat) | /list (history) | /quit")
+
     while True:
         user_input = input("\nYou: ").strip()
         if user_input.lower() in {"exit", "quit"}:
             print("Bye!")
             break
+        if not user_input == "/new":
+            session_id = str(uuid.uuid4())
+            create_conversation(session_id)
+            print(f"New session: {session_id[:8]}...")
+            continue
+        if user_input == "/list":
+            for c in list_conversations(limit=10):
+                print(f"{c['session_id'][:8]}  {c['title'] or '(untitled)'}  {c['updated_at']}")
+            continue
         if not user_input:
             continue
 
