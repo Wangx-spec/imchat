@@ -48,7 +48,7 @@ def chat(payload: ChatRequest) -> ChatResponse:
     try:
         answer, tool_calls = invoke(session_id, message)
         log_tool_calls(session_id, tool_calls)
-        answer = sanitize_ungrounded_kb_claim(answer, tool_calls)
+        # answer = sanitize_ungrounded_kb_claim(answer, tool_calls)
     except Exception as exc:
         logger.exception("[CHAT_ERROR] session=%s error=%s", session_id, exc)
         raise HTTPException(status_code=500, detail=f"Agent error: {exc}") from exc
