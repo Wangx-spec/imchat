@@ -6,7 +6,8 @@ from agents.dialog_agent import build_dialog_runtime
 from config.logging_setup import setup_logging
 from config.settings import load_settings
 from db.connection import init_postgres_pool
-from db.conversations import create_conversation, list_conversations
+from db.conversations import create_conversation, list_conversations, update_conversation, update_title
+from db.messages import save_message, list_messages
 from rag.bootstrap import bootstrap_rag
 
 
@@ -129,7 +130,7 @@ def run_chat() -> None:
         if user_input.lower() in {"exit", "quit"}:
             print("Bye!")
             break
-        if not user_input == "/new":
+        if user_input == "/new":
             session_id = str(uuid.uuid4())
             create_conversation(session_id)
             print(f"New session: {session_id[:8]}...")
@@ -142,12 +143,12 @@ def run_chat() -> None:
             continue
 
         try:
+            save_message(session_id, "user", user_input)
             answer = ""
             tool_calls: list[dict] = []
             if runtime == "langgraph" and settings.agent_streaming:
                 answer, tool_calls = _stream_langgraph(dialog_runner, session_id, user_input)
                 if not answer:
-                    # Safety fallback for providers that do not return updates content.
                     result = dialog_runner.invoke(
                         {"messages": [("user", user_input)]},
                         config={"configurable": {"thread_id": session_id}},
@@ -161,6 +162,15 @@ def run_chat() -> None:
                 )
                 tool_calls = _extract_tool_calls(result)
                 answer = _extract_text_from_result(result)
+
+            save_message(session_id, "assistant", answer)
+            update_conversation(session_id)
+
+            msgs = list_messages(session_id, limit=2)
+            if len(msgs) <= 2:
+                title = user_input[:30].strip()
+                if title:
+                    update_title(session_id, title)
 
             _log_tool_calls(tool_calls)
             logger.info("[CHAT_RESULT] answer=%s", answer)

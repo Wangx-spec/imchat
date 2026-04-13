@@ -224,7 +224,20 @@
       sessionId = newId;
       sessionLabel.textContent = sessionId ? sessionId.slice(0, 8) + "..." : "";
       chatBox.innerHTML = "";
-      appendMessage("assistant", "Switched to conversation " + sessionId.slice(0, 8) + "...");
+
+      try {
+        const res = await fetch(`/api/conversations/${sessionId}/messages`);
+        if (res.ok) {
+          const messages = await res.json();
+          for (const m of messages) {
+            appendMessage(m.role, m.content);
+          }
+        }
+      } catch {}
+
+      if (!chatBox.children.length) {
+        appendMessage("assistant", "Switched to conversation " + sessionId.slice(0, 8) + "...");
+      }
       messageInput.focus();
       await refreshConvList();
     }

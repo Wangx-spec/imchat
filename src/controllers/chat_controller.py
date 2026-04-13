@@ -7,6 +7,7 @@ from services.chat_service import (
     log_tool_calls,
     sanitize_ungrounded_kb_claim,
 )
+from db.messages import list_messages
 import logging
 
 logger = logging.getLogger("chat.web")
@@ -91,3 +92,7 @@ def new_conversation() -> NewConversationResponse:
 @router.get("/conversations")
 def get_conversations() -> list[dict]:
     return list_conversations()
+
+@router.get("/conversations/{session_id}/messages")
+def get_messages(session_id: str) -> list[dict]:
+    return list_messages(session_id)

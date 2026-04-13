@@ -273,24 +273,30 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-_checkpointer = None
+_CHECKPOINTER = None
+_PG_CONN = None
 
 def _build_checkpointer(settings: Settings):
-    global _checkpointer
-    if _checkpointer is not None:
-        return _checkpointer
+    global _CHECKPOINTER, _PG_CONN
+    if _CHECKPOINTER is not None:
+        return _CHECKPOINTER
 
     if settings.postgres_uri:
+        from psycopg import Connection
         from langgraph.checkpoint.postgres import PostgresSaver
-        _checkpointer = PostgresSaver.from_conn_string(settings.postgres_uri)
-        _checkpointer.setup()   # 自动建 checkpoint 表（幂等）
+        _PG_CONN = Connection.connect(
+            settings.postgres_uri,
+            autocommit=True,
+            prepare_threshold=0,
+        )
+        _CHECKPOINTER = PostgresSaver(_PG_CONN)
+        _CHECKPOINTER.setup()   # 自动建 checkpoint 表（幂等）
         logger.info("Checkpointer: PostgresSaver")
     else:
         from langgraph.checkpoint.memory import MemorySaver
-        _checkpointer = MemorySaver()
+        _CHECKPOINTER = MemorySaver()
         logger.info("Checkpointer: MemorySaver (in-memory fallback)")
-
-    return _checkpointer
+    return _CHECKPOINTER
 
 def build_dialog_graph(settings: Settings) -> Any:
     checkpointer = _build_checkpointer(settings)
@@ -307,7 +313,9 @@ def build_dialog_graph(settings: Settings) -> Any:
 
 设计要点：
 
-- `from_conn_string()` 让 `PostgresSaver` 管理自己的连接，不与业务连接池耦合；
+- `PostgresSaver.from_conn_string()` 在 v3.x 是 `@contextmanager`，不能直接赋值。需用 `psycopg.Connection.connect()` 手动建连接，传给 `PostgresSaver(conn)` 构造；
+- 连接设置 `autocommit=True, prepare_threshold=0` 是 LangGraph 内部要求；
+- `_PG_CONN` 持有连接引用，避免被 GC 回收；
 - `.setup()` 幂等，重复调用不报错；
 - 未配置 `POSTGRES_URI` 时降级为 `MemorySaver`，保证向后兼容。
 

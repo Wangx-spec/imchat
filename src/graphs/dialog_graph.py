@@ -1,5 +1,4 @@
 from typing import Any
-from langgraph.checkpoint.memory import MemorySaver
 from langgraph.prebuilt import create_react_agent
 from actions.basic_tools import get_actions
 from config.settings import Settings
@@ -9,22 +8,26 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# 进程内短期记忆（按 thread_id 分桶）
-# 注意：服务重启后会丢失
 _CHECKPOINTER = None
+_PG_CONN = None
 
 def _build_checkpointer(settings: Settings):
-    global _CHECKPOINTER
+    global _CHECKPOINTER, _PG_CONN
     if _CHECKPOINTER is not None:
         return _CHECKPOINTER
-    
+
     if settings.postgres_uri:
+        from psycopg import Connection
         from langgraph.checkpoint.postgres import PostgresSaver
-        _CHECKPOINTER = PostgresSaver.from_conn_string(settings.postgres_uri)
+        _PG_CONN = Connection.connect(
+            settings.postgres_uri,
+            autocommit=True,
+            prepare_threshold=0,
+        )
+        _CHECKPOINTER = PostgresSaver(_PG_CONN)
         _CHECKPOINTER.setup()
         logger.info("Checkpointer: PostgresSaver")
     else:
-        # 未配置 postgres_uri 时降级为 MemorySaver
         from langgraph.checkpoint.memory import MemorySaver
         _CHECKPOINTER = MemorySaver()
         logger.info("Checkpointer: MemorySaver (in-memory fallback)")

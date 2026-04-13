@@ -16,3 +16,13 @@ CREATE TABLE IF NOT EXISTS rag_index_meta (
     children_count  INT NOT NULL,
     built_at        TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS messages (
+    id          SERIAL PRIMARY KEY,
+    session_id  TEXT NOT NULL REFERENCES conversations(session_id) ON DELETE CASCADE,
+    role        TEXT NOT NULL,          -- 'user' / 'assistant'
+    content     TEXT NOT NULL,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_msg_session ON messages(session_id, created_at);
