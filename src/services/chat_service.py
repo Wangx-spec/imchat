@@ -85,14 +85,19 @@ def sanitize_ungrounded_kb_claim(answer: str, tool_calls: list[dict]) -> str:
     
     return text
 
-def invoke(session_id: str, message: str) -> tuple[str, list[dict]]:
-    save_message(session_id, "user", message)
+def _invoke_agent(session_id: str, message: str) -> tuple[str, list[dict]]:
     result = _agent.invoke(
         {"messages": [("user", message)]},
         config={"configurable": {"thread_id": session_id}},
     )
     answer = extract_text_from_result(result)
     tool_calls = extract_tool_calls(result)
+    return answer, tool_calls
+
+def invoke(session_id: str, message: str) -> tuple[str, list[dict]]:
+    save_message(session_id, "user", message)
+    answer, tool_calls = _invoke_agent(session_id, message)
+    answer = sanitize_ungrounded_kb_claim(answer, tool_calls)
     save_message(session_id, "assistant", answer)
     update_conversation(session_id)
     set_title(session_id, message)
@@ -144,10 +149,10 @@ def stream(session_id: str, message: str) -> Generator[str, None, None]:
                                 if delta:
                                     yield sse_event("chunk", {"text": delta})
             if not latest_answer:
-                latest_answer, collected_tool_calls = invoke(session_id, message)
+                latest_answer, collected_tool_calls = _invoke_agent(session_id, message)
                 yield sse_event("chunk", {"text": latest_answer})
         else:
-            latest_answer, collected_tool_calls = invoke(session_id, message)
+            latest_answer, collected_tool_calls = _invoke_agent(session_id, message)
             yield sse_event("chunk", {"text": latest_answer})
         log_tool_calls(session_id, collected_tool_calls)
         latest_answer = sanitize_ungrounded_kb_claim(latest_answer, collected_tool_calls)
