@@ -5,8 +5,8 @@ from datetime import datetime
 
 from langchain_core.tools import tool
 
-from actions.knowledge_base_tools import search_knowledge_base, set_rag_service
-
+from actions.knowledge_base_tools import search_knowledge_base
+from prompts.skills import get_tool_names_for_skills
 
 _ALLOWED_OPERATORS = {
     ast.Add: op.add,
@@ -66,6 +66,15 @@ def calculate(expression: str) -> str:
     logger.info("[TOOL_RESULT] name=calculate result=%s", result_text)
     return result_text
 
+_ALL_TOOLS = {
+    "get_current_time": get_current_time,
+    "calculate": calculate,
+    "search_knowledge_base": search_knowledge_base,
+}
 
-def get_actions():
-    return [get_current_time, calculate, search_knowledge_base]
+
+def get_actions(enabled_skills: list[str] | None = None) -> list:
+    if enabled_skills is None:
+        return list(_ALL_TOOLS.values())
+    needed = get_tool_names_for_skills(enabled_skills)
+    return [t for name, t in _ALL_TOOLS.items() if name in needed]

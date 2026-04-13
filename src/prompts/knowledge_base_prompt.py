@@ -1,16 +1,3 @@
-KB_GROUNDING_RULES = (
-    "调用 search_knowledge_base 时，必须传入用户原始查询，不得翻译。"
-    "search_knowledge_base 返回 JSON 字符串，包含字段：ok、answer、citations、sources、error。"
-    "当 ok=true 时，必须以 answer 作为主要内容，并在结尾添加“参考文档：”区块，引用 citations。"
-    "当 citations 为空或 answer 明确表示未命中时，必须明确说明“知识库没有精确命中”。"
-    "在知识库未精确命中时，禁止伪造“来自知识库”的步骤。"
-    "可以提供通用兜底做法，但必须明确标注为“非知识库兜底建议”。"
-    "禁止编造引用来源。"
-)
-KNOWLEDGE_BASE_PROMPT = (
-    KB_GROUNDING_RULES
-    + "若本轮未调用 search_knowledge_base，禁止使用“根据知识库/参考文档/来源”等表述。"
-)
 
 QUERY_PROMPT = (
     "你是检索查询规划器。请把用户问题转换为检索计划。"
