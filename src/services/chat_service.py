@@ -3,6 +3,8 @@ from config.logging_setup import setup_logging
 from typing import Any, Generator
 import logging
 import json
+from db.messages import save_message
+from db.conversations import update_conversation, update_title
 
 setup_logging()
 
@@ -84,11 +86,17 @@ def sanitize_ungrounded_kb_claim(answer: str, tool_calls: list[dict]) -> str:
     return text
 
 def invoke(session_id: str, message: str) -> tuple[str, list[dict]]:
+    save_message(session_id, "user", message)
     result = _agent.invoke(
         {"messages": [("user", message)]},
         config={"configurable": {"thread_id": session_id}},
     )
-    return extract_text_from_result(result), extract_tool_calls(result)
+    answer = extract_text_from_result(result)
+    tool_calls = extract_tool_calls(result)
+    save_message(session_id, "assistant", answer)
+    update_conversation(session_id)
+    set_title(session_id, message)
+    return answer, tool_calls
 
 def log_tool_calls(session_id: str, tool_calls: list[dict]) -> None:
     if tool_calls:
@@ -107,6 +115,7 @@ def sse_event(event: str, data: dict) -> str:
 
 def stream(session_id: str, message: str) -> Generator[str, None, None]:
     """SSE 流式生成器，controller 直接 yield from 即可。"""
+    save_message(session_id, "user", message)
     latest_answer = ""
     sent_answer = ""
     collected_tool_calls: list[dict] = []
@@ -148,4 +157,19 @@ def stream(session_id: str, message: str) -> Generator[str, None, None]:
         yield sse_event("error", {"detail": str(exc)})
     finally:
         if latest_answer:
+            save_message(session_id, "assistant", latest_answer)
+            update_conversation(session_id)
+            set_title(session_id, message)
             logger.info("[CHAT_RESULT] session=%s answer=%s", session_id, latest_answer)
+
+
+def set_title(session_id: str, message: str) -> None:
+    try:
+        from db.messages import list_messages
+        msgs = list_messages(session_id, limit=2)
+        if len(msgs) <= 2:
+            title = message[:30].strip()
+            if title:
+                update_title(session_id, title)
+    except Exception:
+        pass

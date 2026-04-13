@@ -12,6 +12,8 @@ from agents.dialog_agent import build_dialog_runtime
 from config.logging_setup import setup_logging
 from services.chat_service import init as chat_service_init
 
+from db.connection import init_postgres_pool
+
 from rag.bootstrap import bootstrap_rag
 from controllers.chat_controller import router as chat_router
 from controllers.system_controller import router as system_router, init as system_init
@@ -38,6 +40,10 @@ system_init(_runtime, _index_file, _rag_status)
 
 @app.on_event("startup")
 def on_startup() -> None:
+
+    if _settings.postgres_uri:
+        init_postgres_pool(_settings.postgres_uri)
+        
     if not _settings.rag_enabled:
         _rag_status["ok"] = False                 # 直接改字典
         _rag_status["reason"] = "disabled"
