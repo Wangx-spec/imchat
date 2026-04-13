@@ -45,6 +45,7 @@ class Settings:
     rag_query_plan_timeout_ms: int = 2000
     rag_query_plan_max_variants: int = 5
     postgres_uri: str | None = None
+    enabled_skills: list[str] | None = None    # 新增
 
 
 def load_settings() -> Settings:
@@ -100,6 +101,9 @@ def load_settings() -> Settings:
 
     postgres_uri = os.getenv("POSTGRES_URI", "").strip() or None
 
+    enabled_skills_raw = _parse_csv("ENABLED_SKILLS", "")
+    enabled_skills = enabled_skills_raw if enabled_skills_raw else None
+
     return Settings(
         openai_api_key=api_key,
         openai_model=model,
@@ -138,6 +142,7 @@ def load_settings() -> Settings:
         rag_query_plan_timeout_ms=rag_query_plan_timeout_ms,
         rag_query_plan_max_variants=rag_query_plan_max_variants,
         postgres_uri=postgres_uri,
+        enabled_skills=enabled_skills,
     )
 
 def _parse_bool(name: str, default: bool) -> bool:

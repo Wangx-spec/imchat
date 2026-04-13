@@ -3,7 +3,7 @@ from langgraph.prebuilt import create_react_agent
 from actions.basic_tools import get_actions
 from config.settings import Settings
 from llms.openai_chat import build_openai_chat_model
-from prompts.system_prompts import SYSTEM_PROMPT
+from prompts.system_prompts import build_system_prompt
 import logging
 
 logger = logging.getLogger(__name__)
@@ -36,11 +36,12 @@ def _build_checkpointer(settings: Settings):
 def build_dialog_graph(settings: Settings) -> Any:
     checkpointer = _build_checkpointer(settings)
     llm = build_openai_chat_model(settings)
-    actions = get_actions()
+    actions = get_actions(settings.enabled_skills)
+    prompt = build_system_prompt(settings.enabled_skills)
     return create_react_agent(
         model=llm,
         tools=actions,
-        prompt=SYSTEM_PROMPT,
+        prompt=prompt,
         debug=settings.verbose,
         checkpointer=checkpointer
     )
