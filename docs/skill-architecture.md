@@ -373,3 +373,9 @@ Skill 层（本文档范围）
 3. **import 触发注册**：Skill Prompt 模块必须在 `system_prompts.py` 顶部被 import，否则不会注册到 `_REGISTRY`。
 4. **一个 Skill 可关联多个 Tool**：`tool_names` 是列表，如果某个业务需要多个 Tool 协作（如推荐 + 详情查询），可以放在同一个 Skill 下。
 5. **Prompt 不宜过长**：每个 Skill Prompt 控制在 200 字以内，过长会浪费 token 且可能干扰 LLM 决策。
+
+---
+
+## 相关文档
+
+- [菜品推荐 Skill 实现方案](./dish-recommend-skill-plan.md)：`recommend_dishes` 工具与 Skill Prompt 的设计、与 `search_knowledge_base` 的分工、测试清单（实施前可读）。

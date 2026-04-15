@@ -62,9 +62,11 @@ def extract_text_from_result(result: dict) -> str:
     merged = extract_text_from_content(content)
     return merged or str(content)
 
+_KB_GROUNDED_TOOLS = {"search_knowledge_base", "recommend_dishes"}
+
 def has_kb_tool_call(tool_calls: list[dict]) -> bool:
     for c in tool_calls:
-        if str(c.get("name", "")).strip() == "search_knowledge_base":
+        if str(c.get("name", "")).strip() in _KB_GROUNDED_TOOLS:
             return True
     return False
 
@@ -125,7 +127,7 @@ def stream(session_id: str, message: str) -> Generator[str, None, None]:
     sent_answer = ""
     collected_tool_calls: list[dict] = []
     try:
-        if _runtime == "langgraph" and _settings.agent_streaming:
+        if _runtime.startswith("langgraph") and _settings.agent_streaming:
             for update in _agent.stream(
                 {"messages": [("user", message)]},
                 config={"configurable": {"thread_id": session_id}},
@@ -133,7 +135,9 @@ def stream(session_id: str, message: str) -> Generator[str, None, None]:
             ):
                 if not isinstance(update, dict):
                     continue
-                for node_state in update.values():
+                for node_name, node_state in update.items():
+                    if node_name == "supervisor":
+                        continue
                     if not isinstance(node_state, dict):
                         continue
                     for msg in node_state.get("messages", []):

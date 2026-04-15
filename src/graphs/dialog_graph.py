@@ -38,6 +38,12 @@ def build_dialog_graph(settings: Settings) -> Any:
     llm = build_openai_chat_model(settings)
     actions = get_actions(settings.enabled_skills)
     prompt = build_system_prompt(settings.enabled_skills)
+    logger.info(
+        "[AGENT_BUILD] mode=single runtime=langgraph skills=%s tool_count=%d checkpointer=%s",
+        settings.enabled_skills,
+        len(actions),
+        type(checkpointer).__name__,
+    )
     return create_react_agent(
         model=llm,
         tools=actions,
@@ -45,3 +51,12 @@ def build_dialog_graph(settings: Settings) -> Any:
         debug=settings.verbose,
         checkpointer=checkpointer
     )
+
+def build_multi_agent(settings: Settings) -> Any:
+    checkpointer = _build_checkpointer(settings)
+    from graphs.multi_agent_graph import build_multi_agent_graph
+    logger.info(
+        "[AGENT_BUILD] mode=multi runtime=langgraph checkpointer=%s",
+        type(checkpointer).__name__,
+    )
+    return build_multi_agent_graph(settings, checkpointer=checkpointer)

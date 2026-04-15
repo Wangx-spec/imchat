@@ -15,6 +15,10 @@ def set_rag_service(service: Any) -> None:
     logger.info("[RAG_BIND] service=%s", type(service).__name__ if service else "None")
 
 
+def get_rag_service() -> Any | None:
+    return _rag_service
+
+
 def _build_kb_payload(
     query: str,
     ok: bool,

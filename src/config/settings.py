@@ -46,6 +46,7 @@ class Settings:
     rag_query_plan_max_variants: int = 5
     postgres_uri: str | None = None
     enabled_skills: list[str] | None = None    # 新增
+    agent_mode: str = "single"  # "single" | "multi"
 
 
 def load_settings() -> Settings:
@@ -104,6 +105,11 @@ def load_settings() -> Settings:
     enabled_skills_raw = _parse_csv("ENABLED_SKILLS", "")
     enabled_skills = enabled_skills_raw if enabled_skills_raw else None
 
+    agent_mode = os.getenv("AGENT_MODE", "single").strip().lower()
+    if agent_mode not in {"single", "multi"}:
+        logger.warning("Invalid AGENT_MODE=%r, fallback to single", agent_mode)
+        agent_mode = "single"
+
     return Settings(
         openai_api_key=api_key,
         openai_model=model,
@@ -143,6 +149,7 @@ def load_settings() -> Settings:
         rag_query_plan_max_variants=rag_query_plan_max_variants,
         postgres_uri=postgres_uri,
         enabled_skills=enabled_skills,
+        agent_mode=agent_mode,
     )
 
 def _parse_bool(name: str, default: bool) -> bool:
