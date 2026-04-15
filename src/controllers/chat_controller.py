@@ -5,9 +5,9 @@ from services.chat_service import (
     invoke,
     stream,
     log_tool_calls,
-    sanitize_ungrounded_kb_claim,
 )
 from db.messages import list_messages
+from db.conversations import delete_conversation
 import logging
 
 logger = logging.getLogger("chat.web")
@@ -96,3 +96,15 @@ def get_conversations() -> list[dict]:
 @router.get("/conversations/{session_id}/messages")
 def get_messages(session_id: str) -> list[dict]:
     return list_messages(session_id)
+
+@router.delete("/conversations/{session_id}")
+def remove_conversation(session_id: str) -> dict:
+    session_id = session_id.strip()
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+
+    ok = delete_conversation(session_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="conversation not found")
+
+    return {"ok": True}

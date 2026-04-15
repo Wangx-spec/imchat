@@ -57,15 +57,16 @@
       padding: 8px;
     }
     .conv-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
       padding: 10px 12px;
       border-radius: 8px;
       cursor: pointer;
       font-size: 13px;
       color: #94a3b8;
       margin-bottom: 2px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
       transition: background .12s;
     }
     .conv-item:hover { background: #1e293b; }
@@ -73,10 +74,33 @@
       background: #1e293b;
       color: #e2e8f0;
     }
+    .conv-main {
+      flex: 1;
+      min-width: 0;
+      overflow: hidden;
+    }
+    .conv-title {
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
     .conv-time {
       font-size: 11px;
       color: #475569;
       margin-top: 2px;
+    }
+    .conv-delete-btn {
+      min-width: auto;
+      padding: 4px 8px;
+      font-size: 12px;
+      border: none;
+      background: transparent;
+      color: #64748b;
+      cursor: pointer;
+    }
+    .conv-delete-btn:hover {
+      background: #3f1d1d;
+      color: #f87171;
     }
 
     /* ── main ── */
@@ -192,15 +216,69 @@
       } catch { return null; }
     }
 
+    async function deleteConversationById(id) {
+      try {
+        const res = await fetch(`/api/conversations/${id}`, {
+          method: "DELETE"
+        });
+        return res.ok;
+      } catch {
+        return false;
+      }
+    }
+
     function renderConvList(conversations) {
       convList.innerHTML = "";
       for (const c of conversations) {
         const div = document.createElement("div");
         div.className = "conv-item" + (c.session_id === sessionId ? " active" : "");
-        const title = c.title || "New Chat";
-        const time = formatTime(c.updated_at);
-        div.innerHTML = `<div>${escapeHtml(title)}</div><div class="conv-time">${time}</div>`;
+
+        const main = document.createElement("div");
+        main.className = "conv-main";
+
+        const titleDiv = document.createElement("div");
+        titleDiv.className = "conv-title";
+        titleDiv.textContent = c.title || "New Chat";
+
+        const timeDiv = document.createElement("div");
+        timeDiv.className = "conv-time";
+        timeDiv.textContent = formatTime(c.updated_at);
+
+        main.appendChild(titleDiv);
+        main.appendChild(timeDiv);
+
+        const deleteBtn = document.createElement("button");
+        deleteBtn.className = "conv-delete-btn";
+        deleteBtn.textContent = "Delete";
+        deleteBtn.addEventListener("click", async (e) => {
+          e.stopPropagation();
+
+          const confirmed = confirm(`Delete conversation "${c.title || c.session_id.slice(0, 8)}"?`);
+          if (!confirmed) return;
+
+          const deletedCurrent = c.session_id === sessionId;
+          const ok = await deleteConversationById(c.session_id);
+          if (!ok) {
+            appendMessage("assistant", "Error: failed to delete conversation.");
+            return;
+          }
+
+          const list = await fetchConversations();
+          renderConvList(list);
+
+          if (deletedCurrent) {
+            if (list.length > 0) {
+              await switchSession(list[0].session_id);
+            } else {
+              await handleNewChat();
+            }
+          }
+        });
+
         div.addEventListener("click", () => switchSession(c.session_id));
+
+        div.appendChild(main);
+        div.appendChild(deleteBtn);
         convList.appendChild(div);
       }
     }
@@ -236,7 +314,7 @@
       } catch {}
 
       if (!chatBox.children.length) {
-        appendMessage("assistant", "Switched to conversation " + sessionId.slice(0, 8) + "...");
+        appendMessage("assistant", "No messages yet.");
       }
       messageInput.focus();
       await refreshConvList();
@@ -381,10 +459,8 @@
     (async function init() {
       const conversations = await fetchConversations();
       if (conversations.length > 0) {
-        sessionId = conversations[0].session_id;
         renderConvList(conversations);
-        sessionLabel.textContent = sessionId.slice(0, 8) + "...";
-        appendMessage("assistant", "Welcome back. Resumed last conversation.");
+        await switchSession(conversations[0].session_id);
       } else {
         await handleNewChat();
       }

@@ -6,6 +6,13 @@ from db.connection import get_postgres_pool
 logger = logging.getLogger(__name__)
 
 DEFAULT_USER = "default-user"
+_CHECKPOINT_TABLE_CANDIDATES = (
+    "checkpoint_writes",
+    "checkpoints_writes",
+    "checkpoint_blobs",
+    "checkpoints_blobs",
+    "checkpoints",
+)
 
 def _row_to_dict(row) -> dict:
     return {
@@ -67,3 +74,33 @@ def update_title(session_id: str, title: str) -> None:
                 (title, session_id),
             )
             conn.commit()
+
+def _delete_checkpoint_rows(cur, session_id: str) -> dict[str, int]:
+    deleted_counts: dict[str, int] = {}
+    for table_name in _CHECKPOINT_TABLE_CANDIDATES:
+        cur.execute("SELECT to_regclass(%s)", (table_name,))
+        exists = cur.fetchone()
+        if not exists or exists[0] is None:
+            continue
+        cur.execute(f"DELETE FROM {table_name} WHERE thread_id = %s", (session_id,))
+        deleted_counts[table_name] = cur.rowcount
+    return deleted_counts
+
+def delete_conversation(session_id: str) -> bool:
+    pool = get_postgres_pool()
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            checkpoint_deleted = _delete_checkpoint_rows(cur, session_id)
+            cur.execute(
+                "DELETE FROM conversations WHERE session_id = %s",
+                (session_id,),
+            )
+            deleted = cur.rowcount > 0
+            conn.commit()
+            if checkpoint_deleted:
+                logger.info(
+                    "[CONVERSATION_DELETE] session=%s checkpoint_rows=%s",
+                    session_id,
+                    checkpoint_deleted,
+                )
+            return deleted
