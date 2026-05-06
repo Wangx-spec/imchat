@@ -1,6 +1,8 @@
 import logging
 from pathlib import Path
 import sys
+from fastapi.staticfiles import StaticFiles
+
 # Support running via `python web/app.py` from `src/`.
 if __package__ in {None, ""}:
     src_root = Path(__file__).resolve().parents[1]
@@ -14,7 +16,7 @@ from services.chat_service import init as chat_service_init
 
 from db.connection import init_postgres_pool
 
-from rag.bootstrap import bootstrap_rag
+from rag.core.bootstrap import bootstrap_rag
 from controllers.chat_controller import router as chat_router
 from controllers.system_controller import router as system_router, init as system_init
 from fastapi import FastAPI
@@ -32,6 +34,23 @@ chat_service_init(_agent, _settings, _runtime)
 app = FastAPI(title="Chat UI")
 app.include_router(chat_router)
 app.include_router(system_router)
+
+# 挂载多模态静态资源目录（供“参考图片”和用户上传图片访问）
+_assets_dir = Path(_settings.multimodal_assets_dir)
+_uploads_dir = Path(_settings.multimodal_uploads_dir)
+_assets_dir.mkdir(parents=True, exist_ok=True)
+_uploads_dir.mkdir(parents=True, exist_ok=True)
+
+app.mount(
+    _settings.multimodal_assets_url_prefix,
+    StaticFiles(directory=str(_assets_dir)),
+    name="rag_assets_images",
+)
+app.mount(
+    _settings.multimodal_uploads_url_prefix,
+    StaticFiles(directory=str(_uploads_dir)),
+    name="user_uploads",
+)
 
 _index_file = Path(__file__).resolve().parent / "static" / "index.html"
 _rag_status = {"ok": False, "reason": "not_bootstrapped"}

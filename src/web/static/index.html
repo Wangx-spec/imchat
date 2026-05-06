@@ -3,164 +3,291 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>LangGraph Chat</title>
+  <title>Medical Assistant</title>
+  <link rel="icon" type="image/png" href="https://img.icons8.com/fluency/48/chromatography.png">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
   <style>
-    :root { color-scheme: light dark; }
-    * { box-sizing: border-box; }
     body {
-      margin: 0;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
-      background: #0f172a;
-      color: #e2e8f0;
-      height: 100vh;
-      display: flex;
+      background: #f5f7fb;
+      color: #1f2937;
+      font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
     }
-
-    /* ── sidebar ── */
-    .sidebar {
-      width: 260px;
-      min-width: 260px;
-      background: #0b1120;
-      border-right: 1px solid #1e293b;
+    .page-shell {
+      height: 100vh;
+      padding: 18px;
+    }
+    .sidebar-card, .chat-card {
+      background: #fff;
+      border: 1px solid #e5e7eb;
+      border-radius: 16px;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+    }
+    .sidebar-card {
+      height: calc(100vh - 36px);
       display: flex;
       flex-direction: column;
-      height: 100vh;
+      overflow: hidden;
     }
     .sidebar-header {
       padding: 16px;
-      border-bottom: 1px solid #1e293b;
+      border-bottom: 1px solid #e5e7eb;
     }
-    .sidebar-header h2 {
+    .sidebar-title {
+      font-size: 1rem;
+      font-weight: 700;
       margin: 0 0 12px;
-      font-size: 15px;
-      color: #94a3b8;
-      font-weight: 600;
+      color: #1d4ed8;
     }
     #newChatBtn {
       width: 100%;
-      padding: 10px;
-      font-size: 13px;
-      border-radius: 8px;
-      border: 1px dashed #334155;
-      background: transparent;
-      color: #cbd5e1;
-      cursor: pointer;
-      transition: background .15s, border-color .15s;
+      border-radius: 999px;
+      border: 1px solid #bfdbfe;
+      background: #eff6ff;
+      color: #1d4ed8;
+      font-weight: 600;
+      padding: 8px 10px;
     }
     #newChatBtn:hover {
-      background: #1e293b;
-      border-color: #475569;
+      background: #dbeafe;
     }
     .conv-list {
-      flex: 1;
-      overflow-y: auto;
       padding: 8px;
+      overflow-y: auto;
+      flex: 1;
     }
     .conv-item {
+      border: 1px solid transparent;
+      border-radius: 10px;
       padding: 10px 12px;
-      border-radius: 8px;
+      margin-bottom: 6px;
       cursor: pointer;
-      font-size: 13px;
-      color: #94a3b8;
-      margin-bottom: 2px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      transition: background .12s;
+      background: #f8fafc;
+      transition: all .15s ease;
+      color: #334155;
     }
-    .conv-item:hover { background: #1e293b; }
+    .conv-item:hover {
+      border-color: #cbd5e1;
+      background: #f1f5f9;
+    }
     .conv-item.active {
-      background: #1e293b;
-      color: #e2e8f0;
+      border-color: #93c5fd;
+      background: #eff6ff;
+      color: #1e3a8a;
     }
     .conv-time {
-      font-size: 11px;
-      color: #475569;
       margin-top: 2px;
+      font-size: 11px;
+      color: #64748b;
     }
-
-    /* ── main ── */
-    .main {
-      flex: 1;
+    .chat-card {
+      height: calc(100vh - 36px);
       display: flex;
       flex-direction: column;
-      height: 100vh;
-      min-width: 0;
+      overflow: hidden;
     }
-    .main-header {
-      padding: 14px 20px;
-      border-bottom: 1px solid #1e293b;
-      font-size: 14px;
-      color: #64748b;
+    .chat-header {
+      padding: 14px 18px;
+      border-bottom: 1px solid #e5e7eb;
+      background: #f8fafc;
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 10px;
+    }
+    .chat-title {
+      font-weight: 600;
+      color: #334155;
+      margin: 0;
+      font-size: .95rem;
     }
     #sessionLabel {
-      font-family: monospace;
-      font-size: 12px;
-      color: #475569;
+      font-family: ui-monospace, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+      font-size: .76rem;
+      color: #64748b;
     }
     .chat-box {
       flex: 1;
       overflow-y: auto;
-      padding: 16px 20px;
+      padding: 16px;
+      background: linear-gradient(180deg, #ffffff 0%, #f9fbff 100%);
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
     }
     .msg {
-      margin: 8px 0;
-      line-height: 1.5;
+      max-width: 82%;
+      border-radius: 14px;
+      padding: 10px 12px;
       white-space: pre-wrap;
-      font-size: 14px;
+      line-height: 1.5;
+      font-size: .92rem;
+      border: 1px solid transparent;
+      word-break: break-word;
     }
-    .user { color: #93c5fd; }
-    .assistant { color: #86efac; }
-    .toolbar {
+    .user {
+      align-self: flex-end;
+      background: #e0f2fe;
+      border-color: #bae6fd;
+      color: #0c4a6e;
+    }
+    .assistant {
+      align-self: flex-start;
+      background: #f1f5f9;
+      border-color: #e2e8f0;
+      color: #0f172a;
+    }
+    .image-preview {
+      display: none;
+      padding: 10px 16px 0;
+      gap: 8px;
+      flex-wrap: wrap;
+      border-top: 1px solid #f1f5f9;
+      background: #fff;
+    }
+    .image-preview.has-items {
+      display: flex;
+    }
+    .image-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      border: 1px solid #dbeafe;
+      border-radius: 999px;
+      background: #eff6ff;
+      padding: 4px 8px 4px 4px;
+      max-width: 280px;
+    }
+    .image-chip img {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      object-fit: cover;
+      border: 1px solid #bfdbfe;
+      flex-shrink: 0;
+    }
+    .image-name {
+      font-size: .78rem;
+      color: #1e3a8a;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .image-remove-btn {
+      border: 0;
+      background: #bfdbfe;
+      color: #1e3a8a;
+      border-radius: 999px;
+      font-size: .75rem;
+      padding: 2px 7px;
+      line-height: 1.3;
+      min-width: auto;
+    }
+    .chat-footer {
+      border-top: 1px solid #e5e7eb;
+      padding: 12px 14px;
+      background: #f8fafc;
+    }
+    .input-row {
       display: flex;
       gap: 8px;
-      padding: 12px 20px;
-      border-top: 1px solid #1e293b;
-    }
-    input, button {
-      font-size: 14px;
-      border-radius: 8px;
-      border: 1px solid #334155;
-      padding: 10px 14px;
-      background: #1e293b;
-      color: #e5e7eb;
+      align-items: center;
     }
     #messageInput {
       flex: 1;
+      border-radius: 999px;
+      border: 1px solid #cbd5e1;
+      padding: 10px 14px;
+      background: #fff;
+    }
+    #messageInput:focus {
       outline: none;
+      border-color: #93c5fd;
+      box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.18);
     }
-    #messageInput:focus { border-color: #3b82f6; }
-    button {
+    .icon-btn {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      border: 1px solid #bfdbfe;
+      background: #eff6ff;
+      color: #1d4ed8;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       cursor: pointer;
-      min-width: 80px;
-      transition: background .12s;
     }
-    button:hover { background: #334155; }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .icon-btn:hover {
+      background: #dbeafe;
+    }
+    #sendBtn {
+      border-radius: 999px;
+      border: 1px solid #1d4ed8;
+      background: #2563eb;
+      color: #fff;
+      padding: 8px 16px;
+      font-weight: 600;
+    }
+    #sendBtn:hover {
+      background: #1d4ed8;
+    }
+    #sendBtn:disabled, .icon-btn:disabled {
+      opacity: .5;
+      cursor: not-allowed;
+    }
+    .helper-text {
+      margin-top: 8px;
+      font-size: .75rem;
+      color: #64748b;
+    }
+    @media (max-width: 991px) {
+      .page-shell {
+        height: auto;
+      }
+      .sidebar-card, .chat-card {
+        height: auto;
+        min-height: 420px;
+      }
+    }
   </style>
 </head>
 <body>
-
-  <aside class="sidebar">
-    <div class="sidebar-header">
-      <h2>Conversations</h2>
-      <button id="newChatBtn">+ New Chat</button>
-    </div>
-    <div id="convList" class="conv-list"></div>
-  </aside>
-
-  <div class="main">
-    <div class="main-header">
-      <span>LangGraph Chat</span>
-      <span id="sessionLabel"></span>
-    </div>
-    <div id="chatBox" class="chat-box"></div>
-    <div class="toolbar">
-      <input id="messageInput" type="text" placeholder="Type a message..." />
-      <button id="sendBtn">Send</button>
+  <div class="container-fluid page-shell">
+    <div class="row g-3 h-100">
+      <div class="col-lg-3 col-md-4">
+        <aside class="sidebar-card">
+          <div class="sidebar-header">
+            <h2 class="sidebar-title"><i class="fa-solid fa-robot me-2"></i>Medical Assistant</h2>
+            <button id="newChatBtn" type="button">+ 新建会话</button>
+          </div>
+          <div id="convList" class="conv-list"></div>
+        </aside>
+      </div>
+      <div class="col-lg-9 col-md-8">
+        <main class="chat-card">
+          <div class="chat-header">
+            <p class="chat-title mb-0">医学多 Agent 助手 · 内容仅供参考，不构成诊疗建议</p>
+            <span id="sessionLabel"></span>
+          </div>
+          <div id="chatBox" class="chat-box"></div>
+          <div id="imagePreview" class="image-preview"></div>
+          <div class="chat-footer">
+            <div class="input-row">
+              <input id="imgInput" type="file" accept="image/*" multiple hidden />
+              <button id="uploadBtn" class="icon-btn" type="button" title="上传图片">
+                <i class="fa-solid fa-paperclip"></i>
+              </button>
+              <input
+                id="messageInput"
+                type="text"
+                placeholder="请输入医学问题（如：脑肿瘤的常见影像学表现有哪些？）"
+              />
+              <button id="sendBtn" type="button">发送</button>
+            </div>
+            <div class="helper-text">支持最多 3 张图片；有图片时将自动调用多模态接口。</div>
+          </div>
+        </main>
+      </div>
     </div>
   </div>
 
@@ -171,17 +298,22 @@
     const newChatBtn = document.getElementById("newChatBtn");
     const convList = document.getElementById("convList");
     const sessionLabel = document.getElementById("sessionLabel");
+    const uploadBtn = document.getElementById("uploadBtn");
+    const imgInput = document.getElementById("imgInput");
+    const imagePreview = document.getElementById("imagePreview");
 
     let sessionId = null;
-
-    /* ── conversation management ── */
+    let selectedImages = [];
+    const MAX_IMAGES = 3;
 
     async function fetchConversations() {
       try {
         const res = await fetch("/api/conversations");
         if (!res.ok) return [];
         return await res.json();
-      } catch { return []; }
+      } catch {
+        return [];
+      }
     }
 
     async function createConversation() {
@@ -189,7 +321,9 @@
         const res = await fetch("/api/conversations", { method: "POST" });
         if (!res.ok) return null;
         return await res.json();
-      } catch { return null; }
+      } catch {
+        return null;
+      }
     }
 
     function renderConvList(conversations) {
@@ -197,7 +331,7 @@
       for (const c of conversations) {
         const div = document.createElement("div");
         div.className = "conv-item" + (c.session_id === sessionId ? " active" : "");
-        const title = c.title || "New Chat";
+        const title = c.title || "新会话";
         const time = formatTime(c.updated_at);
         div.innerHTML = `<div>${escapeHtml(title)}</div><div class="conv-time">${time}</div>`;
         div.addEventListener("click", () => switchSession(c.session_id));
@@ -210,8 +344,10 @@
       try {
         const d = new Date(isoStr);
         const pad = n => String(n).padStart(2, "0");
-        return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
-      } catch { return isoStr; }
+        return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+      } catch {
+        return isoStr;
+      }
     }
 
     function escapeHtml(text) {
@@ -236,7 +372,7 @@
       } catch {}
 
       if (!chatBox.children.length) {
-        appendMessage("assistant", "Switched to conversation " + sessionId.slice(0, 8) + "...");
+        appendMessage("assistant", "已切换到会话 " + sessionId.slice(0, 8) + "...");
       }
       messageInput.focus();
       await refreshConvList();
@@ -250,23 +386,21 @@
     async function handleNewChat() {
       const data = await createConversation();
       if (!data || !data.session_id) {
-        appendMessage("assistant", "Error: failed to create conversation.");
+        appendMessage("assistant", "错误：创建会话失败。");
         return;
       }
       sessionId = data.session_id;
       sessionLabel.textContent = sessionId.slice(0, 8) + "...";
       chatBox.innerHTML = "";
-      appendMessage("assistant", "New conversation started.");
+      appendMessage("assistant", "已开启新会话。请描述您的医学问题，回答仅供参考，不能替代专业诊疗。");
       messageInput.focus();
       await refreshConvList();
     }
 
-    /* ── chat ── */
-
     function appendMessage(role, text) {
       const div = document.createElement("div");
       div.className = `msg ${role}`;
-      div.textContent = `${role === "user" ? "You" : "Assistant"}: ${text}`;
+      div.textContent = `${role === "user" ? "我" : "助手"}：${text}`;
       chatBox.appendChild(div);
       chatBox.scrollTop = chatBox.scrollHeight;
       return div;
@@ -284,26 +418,99 @@
       return { frames, rest };
     }
 
+    function renderSelectedImages() {
+      imagePreview.innerHTML = "";
+      if (!selectedImages.length) {
+        imagePreview.classList.remove("has-items");
+        return;
+      }
+      imagePreview.classList.add("has-items");
+      selectedImages.forEach((item, idx) => {
+        const chip = document.createElement("div");
+        chip.className = "image-chip";
+        chip.innerHTML = `
+          <img src="${item.objectUrl}" alt="selected-image-${idx + 1}" />
+          <span class="image-name" title="${escapeHtml(item.file.name)}">${escapeHtml(item.file.name)}</span>
+          <button class="image-remove-btn" type="button" data-remove-idx="${idx}">移除</button>
+        `;
+        imagePreview.appendChild(chip);
+      });
+    }
+
+    function clearSelectedImages() {
+      for (const item of selectedImages) {
+        URL.revokeObjectURL(item.objectUrl);
+      }
+      selectedImages = [];
+      imgInput.value = "";
+      renderSelectedImages();
+    }
+
+    function addSelectedFiles(fileList) {
+      const files = Array.from(fileList || []).filter((f) => f.type.startsWith("image/"));
+      if (!files.length) return;
+      const remain = MAX_IMAGES - selectedImages.length;
+      if (remain <= 0) {
+        appendMessage("assistant", `一次最多支持 ${MAX_IMAGES} 张图片。`);
+        return;
+      }
+      const accepted = files.slice(0, remain);
+      for (const file of accepted) {
+        selectedImages.push({ file, objectUrl: URL.createObjectURL(file) });
+      }
+      if (files.length > accepted.length) {
+        appendMessage("assistant", `已达到图片上限（${MAX_IMAGES} 张），其余图片已忽略。`);
+      }
+      renderSelectedImages();
+    }
+
     async function sendMessage() {
       const message = messageInput.value.trim();
-      if (!message || !sessionId) return;
-      appendMessage("user", message);
+      const hasImages = selectedImages.length > 0;
+      if ((!message && !hasImages) || !sessionId) return;
+
+      const userText = message || "（仅图片）";
+      const userDisplay = hasImages ? `${userText}\n[附带 ${selectedImages.length} 张图片]` : userText;
+      appendMessage("user", userDisplay);
+
+      const filesToSend = selectedImages.map((x) => x.file);
       messageInput.value = "";
+      clearSelectedImages();
       sendBtn.disabled = true;
+      uploadBtn.disabled = true;
 
       try {
-        const response = await fetch("/api/chat/stream", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ session_id: sessionId, message })
-        });
+        let response = null;
+        if (filesToSend.length > 0) {
+          const fd = new FormData();
+          fd.append("session_id", sessionId);
+          fd.append("message", message);
+          for (const file of filesToSend) {
+            fd.append("images", file, file.name);
+          }
+          response = await fetch("/api/chat/multimodal/stream", {
+            method: "POST",
+            body: fd,
+          });
+        } else {
+          response = await fetch("/api/chat/stream", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ session_id: sessionId, message }),
+          });
+        }
+
         if (!response.ok) {
-          const data = await response.json();
-          appendMessage("assistant", `Error: ${data.detail || "request failed"}`);
+          let detail = "请求失败";
+          try {
+            const data = await response.json();
+            detail = data.detail || detail;
+          } catch {}
+          appendMessage("assistant", `错误：${detail}`);
           return;
         }
         if (!response.body) {
-          appendMessage("assistant", "Error: stream not available");
+          appendMessage("assistant", "错误：流式响应不可用");
           return;
         }
 
@@ -336,47 +543,71 @@
             if (!dataLines.length) continue;
 
             let payload = null;
-            try { payload = JSON.parse(dataLines.join("\n")); }
-            catch { continue; }
+            try {
+              payload = JSON.parse(dataLines.join("\n"));
+            } catch {
+              continue;
+            }
 
             if (eventName === "chunk") {
-              assistantText += (payload.text || "");
-              assistantNode.textContent = `Assistant: ${assistantText}`;
+              const piece = payload.text || "";
+              if (payload.replace) {
+                assistantText = piece;
+              } else {
+                assistantText += piece;
+              }
+              assistantNode.textContent = `助手：${assistantText}`;
               chatBox.scrollTop = chatBox.scrollHeight;
             } else if (eventName === "done") {
-              if (!assistantText) {
+              const finalAns = (payload.answer || "").trim();
+              if (finalAns) {
+                assistantText = finalAns;
+                assistantNode.textContent = `助手：${assistantText}`;
+                chatBox.scrollTop = chatBox.scrollHeight;
+              } else if (!assistantText.trim()) {
                 assistantText = payload.answer || "";
-                assistantNode.textContent = `Assistant: ${assistantText}`;
+                assistantNode.textContent = `助手：${assistantText}`;
                 chatBox.scrollTop = chatBox.scrollHeight;
               }
             } else if (eventName === "error") {
-              assistantNode.textContent = `Assistant: Error: ${payload.detail || "stream failed"}`;
+              assistantNode.textContent = `助手：错误：${payload.detail || "流式响应失败"}`;
               chatBox.scrollTop = chatBox.scrollHeight;
             }
           }
         }
 
         if (!assistantText) {
-          assistantNode.textContent = "Assistant: No answer";
+          assistantNode.textContent = "助手：未获取到回答";
         }
       } catch (err) {
-        appendMessage("assistant", `Error: ${err}`);
+        appendMessage("assistant", `错误：${err}`);
       } finally {
         sendBtn.disabled = false;
+        uploadBtn.disabled = false;
         messageInput.focus();
         await refreshConvList();
       }
     }
 
-    /* ── event listeners ── */
-
     sendBtn.addEventListener("click", sendMessage);
     newChatBtn.addEventListener("click", handleNewChat);
+    uploadBtn.addEventListener("click", () => imgInput.click());
+    imgInput.addEventListener("change", (e) => {
+      addSelectedFiles(e.target.files);
+      imgInput.value = "";
+    });
+    imagePreview.addEventListener("click", (e) => {
+      const target = e.target.closest("[data-remove-idx]");
+      if (!target) return;
+      const idx = Number(target.getAttribute("data-remove-idx"));
+      if (Number.isNaN(idx) || idx < 0 || idx >= selectedImages.length) return;
+      URL.revokeObjectURL(selectedImages[idx].objectUrl);
+      selectedImages.splice(idx, 1);
+      renderSelectedImages();
+    });
     messageInput.addEventListener("keydown", (e) => {
       if (e.key === "Enter") sendMessage();
     });
-
-    /* ── init ── */
 
     (async function init() {
       const conversations = await fetchConversations();
@@ -384,7 +615,7 @@
         sessionId = conversations[0].session_id;
         renderConvList(conversations);
         sessionLabel.textContent = sessionId.slice(0, 8) + "...";
-        appendMessage("assistant", "Welcome back. Resumed last conversation.");
+        appendMessage("assistant", "欢迎回来，已恢复上次会话。回答仅供参考，不构成诊疗建议。");
       } else {
         await handleNewChat();
       }

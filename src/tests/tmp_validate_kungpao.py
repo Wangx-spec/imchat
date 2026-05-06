@@ -1,6 +1,6 @@
 from config.settings import load_settings
-from rag.config import build_rag_config, sanitize_rag_config, validate_rag_config
-from rag.service import RAGService
+from rag.core.config import build_rag_config, sanitize_rag_config, validate_rag_config
+from rag.core.service import RAGService
 
 
 def dump(service: RAGService, query: str, tag: str) -> None:

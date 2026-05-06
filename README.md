@@ -1,14 +1,21 @@
-# imchat：LangGraph/LangChain 双运行时对话项目
+# 医学多 Agent 助手（Biomedical Multi-Agent Assistant）
 
-`imchat` 是一个 Python 对话应用，支持 CLI 与 Web 两种入口，当前以 `LangGraph` 为默认运行时，并保留 `LangChain` 回退能力。
+基于 `LangGraph` + `LangChain` + `FastAPI` 的**生产级生物医学多智能体助手**，支持 CLI 与 Web 两种入口。
+项目通过 Supervisor 路由将问题分派到专长 Agent（医学知识库 QA / 通用医疗对话 / 未来的 Web 搜索与影像分析），并在入口/出口挂载安全双闸。
+
+> ⚠️ **免责声明**：本系统输出仅供学习与信息检索参考，不构成医疗诊断或治疗建议，任何临床决策请遵循执业医师意见。
+
+> 🚧 **项目状态**：当前处于从"烹饪知识库"重构为"生物医学多 Agent 助手"的阶段性过渡中。
+> 详细重构路线、逐文件改动清单与验收标准见 [`docs/bio-med-refactor-impl-plan.md`](docs/bio-med-refactor-impl-plan.md)。
 
 ## 当前能力概览
 
 - 双运行时：`LangGraph`（默认）与 `LangChain`（兼容回退）
+- 多 Agent 编排：Supervisor 路由 + 专长 Agent（`medical_kb` / `conversation` ……）
 - 多轮会话记忆：基于 LangGraph `MemorySaver` checkpointer，按 `thread_id`/`session_id` 自动持久化
 - 工具调用：当前时间、数学表达式计算
 - Web 对话接口：同步接口 + SSE 流式接口
-- 知识库 RAG：`search_knowledge_base` 工具，包含幻觉防护（`sanitize_ungrounded_kb_claim`）
+- 医学知识库 RAG：`search_knowledge_base` 工具（规划中将重命名为 `search_medical_kb`），包含幻觉防护（`sanitize_ungrounded_kb_claim`）
 - Controller / Service 分层架构：路由、业务逻辑、应用初始化各司其职
 
 ## 技术栈
@@ -38,24 +45,28 @@ flowchart LR
 ## 目录结构（按职责）
 
 ```text
-imchat/
+medical-assistant/
 ├─ src/
 │  ├─ actions/           # 工具定义（time / calculate / search_knowledge_base）
-│  ├─ agents/            # 运行时分流与 Agent 组装
-│  ├─ graphs/            # LangGraph 图组装（含 MemorySaver）
+│  ├─ agents/            # Agent 注册表、运行时分流、guardrails（规划中）
+│  ├─ graphs/            # LangGraph 图组装（Supervisor + 专长节点 + MemorySaver）
 │  ├─ llms/              # 模型初始化（ChatOpenAI）
 │  ├─ config/            # 配置（Settings）与日志
 │  ├─ controllers/       # HTTP 路由层（chat_controller / system_controller）
 │  ├─ services/          # 业务逻辑层（chat_service：invoke / stream / 幻觉防护）
-│  ├─ prompts/           # 系统提示词
+│  ├─ prompts/           # 系统提示词、skill 定义（medical_kb / conversation ……）
 │  ├─ rag/               # RAG 模块（检索 / 分块 / 重排 / 路由）
 │  ├─ tests/             # 冒烟脚本
 │  ├─ main.py            # CLI 入口
 │  └─ web/
 │     ├─ app.py          # FastAPI 应用初始化 + 路由挂载
 │     └─ static/         # 前端页面
-├─ docs/                 # 设计与实施文档
-├─ .env.example
+├─ source_dir/
+│  ├─ raw/               # 原始医学 PDF
+│  ├─ raw_extras/        # 原始医学 PDF（补充）
+│  └─ parsed_md/{topic}/ # 阶段 1 PDF 管道产出的 Markdown 语料（RAG 数据源）
+├─ docs/                 # 设计与实施文档（含重构计划）
+├─ .env
 ├─ requirements.txt
 └─ README.md
 ```
@@ -72,7 +83,7 @@ pip install -r requirements.txt
 
 ### 2) 配置环境变量
 
-复制 `.env.example` 为 `.env`，至少配置：
+编辑项目根目录下的 `.env`，至少配置：
 
 ```env
 OPENAI_API_KEY=your_api_key
@@ -82,7 +93,14 @@ OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 AGENT_RUNTIME=langgraph
 AGENT_STREAMING=true
 AGENT_VERBOSE=false
+
+# 医学知识库语料目录（由 scripts/ingest_pdf.py 生成）
+RAG_ENABLED=true
+RAG_SOURCE_DIRS=source_dir/parsed_md
+RAG_INDEX_DIR=data/medical_rag_index
 ```
+
+> 阶段 1（PDF → Markdown 管道）落地之前，`source_dir/parsed_md` 可能为空，此时可将 `RAG_ENABLED=false` 暂时关闭 RAG。
 
 常用开关：
 
@@ -149,12 +167,15 @@ SSE 事件类型：
 
 ## RAG 状态说明
 
-`src/rag/*` 模块已具备完整实现，工具层挂载 `search_knowledge_base`。
+`src/rag/*` 模块已具备完整实现（FAISS 向量检索 + BM25 关键词检索 + 可选 rerank），工具层挂载 `search_knowledge_base`。
 RAG 是否实际可用取决于启动阶段 `bootstrap_rag` 是否成功，以及 `RAG_ENABLED` 配置。
 
+- 数据源：`source_dir/parsed_md/{topic}/*.md`（医学领域：`brain_tumor`、`chest_xray`、`skin_lesion`、`diabetes` 等 topic）
 - `RAG_ENABLED=false`：`search_knowledge_base` 会返回"知识检索服务未初始化"降级文案
 - `RAG_ENABLED=true` 且配置正确：工具返回 `answer + sources`
 - 幻觉防护：未调用 KB 工具却出现"知识库引用"话术时，自动标记为通用建议
+
+> PDF → Markdown 的数据管道与 `_infer_category` 的 topic 识别逻辑详见 [`docs/bio-med-refactor-impl-plan.md`](docs/bio-med-refactor-impl-plan.md) 阶段 1。
 
 ## 冒烟脚本
 

@@ -1,9 +1,9 @@
 from config.settings import load_settings
-from rag.config import build_rag_config, sanitize_rag_config, validate_rag_config
-from rag.data_loader import MarkdownDataLoader
-from rag.chunking import ParentChildChunker
-from rag.index_store import LocalFAISSIndexStore
-from rag.retriever import HybridRetriever
+from rag.core.config import build_rag_config, sanitize_rag_config, validate_rag_config
+from rag.ingestion.chunking import ParentChildChunker
+from rag.ingestion.data_loader import MarkdownDataLoader
+from rag.retrieval.index_store import LocalFAISSIndexStore
+from rag.retrieval.retriever import HybridRetriever
 
 
 def main() -> None:

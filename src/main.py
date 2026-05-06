@@ -8,7 +8,7 @@ from config.settings import load_settings
 from db.connection import init_postgres_pool
 from db.conversations import create_conversation, list_conversations, update_conversation, update_title
 from db.messages import save_message, list_messages
-from rag.bootstrap import bootstrap_rag
+from rag.core.bootstrap import bootstrap_rag
 
 
 logger = logging.getLogger("chat.cli")

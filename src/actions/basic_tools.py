@@ -5,8 +5,9 @@ from datetime import datetime
 
 from langchain_core.tools import tool
 
-from actions.knowledge_base_tools import search_knowledge_base
-from actions.dishes.recommend_dishes_tools import recommend_dishes
+from actions.knowledge_base_tools import search_knowledge_base, search_medical_kb
+from actions.web_search_tools import web_search
+
 from prompts.skills import get_tool_names_for_skills
 
 _ALLOWED_OPERATORS = {
@@ -76,8 +77,9 @@ def calculate(expression: str) -> str:
 _ALL_TOOLS = {
     "get_current_time": get_current_time,
     "calculate": calculate,
-    "search_knowledge_base": search_knowledge_base,
-    "recommend_dishes": recommend_dishes,
+    "search_medical_kb": search_medical_kb,
+    "search_knowledge_base": search_knowledge_base,  # alias，兼容旧配置
+    "web_search": web_search,
 }
 
 
