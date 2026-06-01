@@ -72,6 +72,11 @@ class Settings:
     agent_mode: str = "single"  # "single" | "multi"
     guardrails_enabled: bool = True
     supervisor_confidence_threshold: float = 0.6
+
+    agent_mode: str = "single"  # "single" | "multi" | "swarm"
+    swarm_max_workers: int = 3
+    swarm_timeout_s: float = 90.0
+    complexity_threshold: float = 0.6
     
     # 网络搜索
     tavily_api_key: str | None = None
@@ -167,7 +172,7 @@ def load_settings() -> Settings:
     supervisor_confidence_threshold = _parse_float("SUPERVISOR_CONFIDENCE_THRESHOLD", 0.6, 0.0, 1.0)
 
     agent_mode = os.getenv("AGENT_MODE", "single").strip().lower()
-    if agent_mode not in {"single", "multi"}:
+    if agent_mode not in {"single", "multi", "swarm"}:
         logger.warning("Invalid AGENT_MODE=%r, fallback to single", agent_mode)
         agent_mode = "single"
     rag_rerank_backend = os.getenv("RAG_RERANK_BACKEND", "qwen").strip().lower() or "qwen"
@@ -179,6 +184,10 @@ def load_settings() -> Settings:
 
     tavily_api_key = os.getenv("TAVILY_API_KEY", "").strip() or None
     tavily_enabled = _parse_bool("TAVILY_ENABLED", False)
+
+    swarm_max_workers = _parse_int("SWARM_MAX_WORKERS", 3, 1)
+    swarm_timeout_s = _parse_float("SWARM_TIMEOUT_S", 90.0, 1.0, 600.0)
+    complexity_threshold = _parse_float("COMPLEXITY_THRESHOLD", 0.6, 0.0, 1.0)
 
     return Settings(
         openai_api_key=api_key,
@@ -244,6 +253,9 @@ def load_settings() -> Settings:
         tavily_api_key=tavily_api_key,
         tavily_enabled=tavily_enabled,
 
+        swarm_max_workers=swarm_max_workers,
+        swarm_timeout_s=swarm_timeout_s,
+        complexity_threshold=complexity_threshold,
 
     )
 

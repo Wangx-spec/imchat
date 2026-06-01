@@ -60,3 +60,12 @@ def build_multi_agent(settings: Settings) -> Any:
         type(checkpointer).__name__,
     )
     return build_multi_agent_graph(settings, checkpointer=checkpointer)
+
+def build_swarm_graph(settings: Settings) -> Any:
+    checkpointer = _build_checkpointer(settings)
+    from graphs.swarm_graph import build_swarm_graph
+    logger.info(
+        "[AGENT_BUILD] mode=swarm runtime=langgraph checkpointer=%s",
+        type(checkpointer).__name__,
+    )
+    return build_swarm_graph(settings, checkpointer=checkpointer)

@@ -36,6 +36,16 @@ def build_dialog_runtime(settings: Settings) -> Tuple[Any, str]:
         return build_dialog_agent_langchain(settings), "langchain"
 
     try:
+        if mode == "swarm":
+            from graphs.swarm_graph import build_swarm_graph
+            logger.info(
+                "[RUNTIME_SELECT] selected_runtime=langgraph-swarm max_workers=%s timeout_s=%s complexity_threshold=%s",
+                settings.swarm_max_workers,
+                settings.swarm_timeout_s,
+                settings.complexity_threshold,
+            )
+            return build_swarm_graph(settings), "langgraph-swarm"
+
         if mode == "multi":
             from graphs.dialog_graph import build_multi_agent
             logger.info("[RUNTIME_SELECT] selected_runtime=langgraph-multi")
