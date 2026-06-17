@@ -1,191 +1,237 @@
 # 医学多 Agent 助手（Biomedical Multi-Agent Assistant）
 
-基于 `LangGraph` + `LangChain` + `FastAPI` 的**生产级生物医学多智能体助手**，支持 CLI 与 Web 两种入口。
-项目通过 Supervisor 路由将问题分派到专长 Agent（医学知识库 QA / 通用医疗对话 / 未来的 Web 搜索与影像分析），并在入口/出口挂载安全双闸。
+基于 `LangGraph`、`LangChain/LangChain Core` 与 `FastAPI` 的医学多智能体助手。项目当前使用统一的 `langgraph-swarm` 运行路径：输入先经过图像/文本护栏与分诊，再由领域 Agent 或 Swarm 并行协作生成回答，最后经过输出 guardrails 与可选 Harness 约束复核。
 
-> ⚠️ **免责声明**：本系统输出仅供学习与信息检索参考，不构成医疗诊断或治疗建议，任何临床决策请遵循执业医师意见。
+> 免责声明：本系统输出仅供学习、信息检索与健康知识参考，不构成医疗诊断或治疗建议。任何临床决策请遵循执业医师意见。
 
-> 🚧 **项目状态**：当前处于从"烹饪知识库"重构为"生物医学多 Agent 助手"的阶段性过渡中。
-> 详细重构路线、逐文件改动清单与验收标准见 [`docs/bio-med-refactor-impl-plan.md`](docs/bio-med-refactor-impl-plan.md)。
+## 当前能力
 
-## 当前能力概览
-
-- 双运行时：`LangGraph`（默认）与 `LangChain`（兼容回退）
-- 多 Agent 编排：Supervisor 路由 + 专长 Agent（`medical_kb` / `conversation` ……）
-- 多轮会话记忆：基于 LangGraph `MemorySaver` checkpointer，按 `thread_id`/`session_id` 自动持久化
-- 工具调用：当前时间、数学表达式计算
-- Web 对话接口：同步接口 + SSE 流式接口
-- 医学知识库 RAG：`search_knowledge_base` 工具（规划中将重命名为 `search_medical_kb`），包含幻觉防护（`sanitize_ungrounded_kb_claim`）
-- Controller / Service 分层架构：路由、业务逻辑、应用初始化各司其职
+- 统一 LangGraph Swarm 编排：`triage -> single/image/swarm -> hitl -> output_guardrail`。
+- 领域 Agent：医学咨询、诊断辅助、医学研究，基于 `create_react_agent` 自主调用 Skill。
+- 文档驱动 Skill：`src/skills/defs/*/SKILL.md` + `script/*.py` 自动加载。
+- RAG：FAISS 默认向量库，支持 BM25、RRF、Query Planner、rerank、低置信拦截；可选切换 Qdrant。
+- 多模态：支持最多多张图片上传，使用 VLM 生成图像摘要与医学相关性提示。
+- HITL：可选 LangGraph interrupt 暂停/恢复，用于人工复核诊断类输出。
+- Guardrails/Harness：输入、图像、输出安全复核；可选确定性约束与自动修复。
+- Web 前端：Vue 3 + Vite，支持会话列表、SSE 流式、多图预览、HITL 卡片、STT/TTS。
+- 服务分层：`controllers`、`services`、`graphs`、`rag`、`skills`、`db` 分层维护。
 
 ## 技术栈
 
 - Python 3.10+
-- LLM 框架：`langgraph`、`langchain`、`langchain-openai`
-- Web：`FastAPI` + `uvicorn`
-- 配置：`python-dotenv`
-- RAG（模块级）：`langchain-community`、`faiss-cpu`、`rank_bm25`
+- FastAPI + uvicorn
+- LangGraph + LangChain Core + LangChain OpenAI
+- Vue 3 + Vite + TypeScript + Pinia
+- FAISS / Qdrant（可选）
+- PostgreSQL checkpointer / in-memory checkpointer
+- ElevenLabs STT/TTS（可选）
+- Mem0 长期记忆（可选）
 
-## 架构与数据流
-
-```mermaid
-flowchart LR
-    userInput[UserInput] --> entry[CLI / Web]
-    entry --> controller[chat_controller]
-    controller --> service[chat_service]
-    service --> agent[LangGraph ReAct Agent]
-    agent --> tools[actions / KB tool]
-    agent --> model[ChatOpenAI]
-    agent --> checkpointer[MemorySaver]
-    service --> sse[SSE Stream / 同步响应]
-    sse --> controller
-    controller --> entry
-```
-
-## 目录结构（按职责）
+## 目录结构
 
 ```text
-medical-assistant/
+cook-proj/
+├─ frontend/                 # Vue 3 前端源码
 ├─ src/
-│  ├─ actions/           # 工具定义（time / calculate / search_knowledge_base）
-│  ├─ agents/            # Agent 注册表、运行时分流、guardrails（规划中）
-│  ├─ graphs/            # LangGraph 图组装（Supervisor + 专长节点 + MemorySaver）
-│  ├─ llms/              # 模型初始化（ChatOpenAI）
-│  ├─ config/            # 配置（Settings）与日志
-│  ├─ controllers/       # HTTP 路由层（chat_controller / system_controller）
-│  ├─ services/          # 业务逻辑层（chat_service：invoke / stream / 幻觉防护）
-│  ├─ prompts/           # 系统提示词、skill 定义（medical_kb / conversation ……）
-│  ├─ rag/               # RAG 模块（检索 / 分块 / 重排 / 路由）
-│  ├─ tests/             # 冒烟脚本
-│  ├─ main.py            # CLI 入口
+│  ├─ actions/               # RAG/Web Search 等后端工具适配
+│  ├─ agents/                # Agent registry、领域 Agent、guardrails
+│  ├─ config/                # Settings 与日志
+│  ├─ controllers/           # FastAPI API 路由
+│  ├─ db/                    # 会话与消息持久化
+│  ├─ graphs/                # LangGraph swarm 图与公共节点
+│  ├─ llms/                  # LLM/VLM 客户端构造
+│  ├─ memory/                # Mem0 等长期记忆封装
+│  ├─ rag/                   # RAG ingestion/retrieval/generation
+│  ├─ services/              # Chat/Speech 服务
+│  ├─ skills/                # 文档驱动 Skill loader 与 defs
+│  ├─ tests/                 # pytest 测试
+│  ├─ main.py                # CLI 入口
 │  └─ web/
-│     ├─ app.py          # FastAPI 应用初始化 + 路由挂载
-│     └─ static/         # 前端页面
-├─ source_dir/
-│  ├─ raw/               # 原始医学 PDF
-│  ├─ raw_extras/        # 原始医学 PDF（补充）
-│  └─ parsed_md/{topic}/ # 阶段 1 PDF 管道产出的 Markdown 语料（RAG 数据源）
-├─ docs/                 # 设计与实施文档（含重构计划）
-├─ .env
+│     ├─ app.py              # FastAPI app 初始化
+│     └─ static/             # Vue 构建产物
+├─ source_dir/file_data/     # 当前 RAG Markdown 语料目录
+├─ data/                     # RAG index、上传图片等运行数据
+├─ docs/                     # 历史方案与融合方案
+├─ .env.example              # 脱敏配置模板
 ├─ requirements.txt
 └─ README.md
 ```
 
-## 运行前准备
+## 环境准备
 
-### 1) 安装依赖
+### 1. Python 依赖
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+cd /Users/aimiaomiao/cook-proj
+python3 -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2) 配置环境变量
+### 2. 前端依赖
 
-编辑项目根目录下的 `.env`，至少配置：
+只有需要修改 Vue 源码或重新构建前端时才需要执行：
+
+```bash
+npm install --prefix frontend
+npm run build --prefix frontend
+```
+
+构建产物会输出到 `src/web/static/`，由 FastAPI 直接托管。
+
+### 3. 配置环境变量
+
+复制模板并填写真实密钥：
+
+```bash
+cp .env.example .env
+```
+
+至少需要配置：
 
 ```env
-OPENAI_API_KEY=your_api_key
+OPENAI_API_KEY=your_openai_or_dashscope_key
 OPENAI_MODEL=qwen-plus
 OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 
-AGENT_RUNTIME=langgraph
-AGENT_STREAMING=true
-AGENT_VERBOSE=false
-
-# 医学知识库语料目录（由 scripts/ingest_pdf.py 生成）
 RAG_ENABLED=true
-RAG_SOURCE_DIRS=source_dir/parsed_md
+RAG_SOURCE_DIRS=source_dir/file_data
 RAG_INDEX_DIR=data/medical_rag_index
+RAG_EMBEDDING_API_KEY=your_embedding_key
 ```
 
-> 阶段 1（PDF → Markdown 管道）落地之前，`source_dir/parsed_md` 可能为空，此时可将 `RAG_ENABLED=false` 暂时关闭 RAG。
-
-常用开关：
-
-- `AGENT_RUNTIME`：`langgraph` 或 `langchain`
-- `AGENT_STREAMING`：是否启用流式（CLI + Web 流式路径）
-- `AGENT_USE_LANGGRAPH_MEMORY`：是否启用 LangGraph 原生记忆（默认 `true`）
-- `RAG_ENABLED`：是否启用知识库 RAG（默认 `false`）
-- `LOG_LEVEL`：日志级别（`DEBUG/INFO/WARNING/ERROR`）
+`.env` 已加入 `.gitignore`，不要提交真实密钥。`.env.example` 可以提交。
 
 ## 启动方式
-
-### CLI
-
-```bash
-python src/main.py
-```
 
 ### Web
 
 ```bash
+source .venv/bin/activate
 uvicorn web.app:app --app-dir src --reload
 ```
 
-打开浏览器：`http://127.0.0.1:8000`
+访问：
+
+```text
+http://127.0.0.1:8000
+```
+
+### Vue 前端开发模式
+
+后端仍需运行在 `127.0.0.1:8000`，前端开发服务器会代理 `/api` 与 `/health`：
+
+```bash
+npm run dev --prefix frontend
+```
+
+通常访问：
+
+```text
+http://127.0.0.1:5173
+```
+
+### CLI
+
+```bash
+source .venv/bin/activate
+python src/main.py
+```
 
 ## Web API
 
 | 方法 | 路径 | 说明 |
-|------|------|------|
-| `GET` | `/` | 前端页面 |
-| `GET` | `/health` | 健康检查（含 RAG 状态、运行时信息） |
-| `POST` | `/api/chat` | 同步返回完整答案 |
-| `POST` | `/api/chat/stream` | SSE 流式返回 |
-| `POST` | `/api/reset` | 按 `session_id` 重置会话 |
+|---|---|---|
+| `GET` | `/` | Vue 前端页面 |
+| `GET` | `/health` | 健康检查，返回 runtime 与 RAG 状态 |
+| `POST` | `/api/conversations` | 新建会话 |
+| `GET` | `/api/conversations` | 获取会话列表 |
+| `GET` | `/api/conversations/{session_id}/messages` | 获取会话消息 |
+| `POST` | `/api/chat` | 同步文本问答 |
+| `POST` | `/api/chat/stream` | 文本 SSE 流式问答 |
+| `POST` | `/api/chat/multimodal/stream` | 图片 + 文本多模态 SSE |
+| `POST` | `/api/chat/hitl/resume` | HITL 人工复核后恢复图执行 |
+| `POST` | `/api/speech/stt` | 语音转文本 |
+| `POST` | `/api/speech/tts` | 文本转语音 |
+| `POST` | `/api/reset` | 创建新会话 ID |
 
-SSE 事件类型：
-- `chunk`：增量文本片段（`{"text": "..."}`）
-- `done`：最终答案（`{"answer": "..."}`）
-- `error`：错误信息（`{"detail": "..."}`）
+SSE 事件：
 
-请求体格式（`/api/chat`、`/api/chat/stream`）：
-```json
-{ "session_id": "xxx", "message": "你好" }
+- `chunk`：增量文本，形如 `{"text": "...", "replace": false}`。
+- `done`：最终答案，形如 `{"answer": "..."}`。
+- `error`：错误信息，形如 `{"detail": "..."}`。
+- `hitl`：人工复核中断，形如 `{"interrupt": {...}}`。
+
+## RAG 说明
+
+当前默认语料目录为：
+
+```env
+RAG_SOURCE_DIRS=source_dir/file_data
 ```
 
-## 工具与运行时说明
+RAG 初始化由 `src/rag/core/bootstrap.py` 在 Web 启动阶段触发。若配置不完整或索引构建失败，`/health` 会返回 `rag_ready=false` 与失败原因；聊天工具会降级处理。
 
-- 工具定义在 `src/actions/basic_tools.py`
-  - `get_current_time`
-  - `calculate`
-  - `search_knowledge_base`（RAG 启用时生效）
-- 运行时分流在 `src/agents/dialog_agent.py`
-  - `AGENT_RUNTIME=langgraph`：优先 `src/graphs/dialog_graph.py`
-  - LangGraph 初始化失败时自动回退 `LangChain`
+向量后端默认是 FAISS：
 
-## 代码分层说明
+```env
+VECTOR_DB_PROVIDER=faiss
+```
 
-| 层 | 文件 | 职责 |
-|---|---|---|
-| **App** | `web/app.py` | 创建 FastAPI 实例、初始化 settings/agent、注入 service/controller、RAG 启动 |
-| **Controller** | `controllers/chat_controller.py` | 请求校验、调用 service、返回响应 |
-| **Controller** | `controllers/system_controller.py` | `/health`、`/` 静态页面 |
-| **Service** | `services/chat_service.py` | invoke/stream、工具日志、幻觉防护、SSE 格式化 |
+如需使用 Qdrant，配置：
 
-## RAG 状态说明
+```env
+VECTOR_DB_PROVIDER=qdrant
+QDRANT_URL=http://localhost:6333
+QDRANT_API_KEY=
+QDRANT_COLLECTION=rag_documents
+```
 
-`src/rag/*` 模块已具备完整实现（FAISS 向量检索 + BM25 关键词检索 + 可选 rerank），工具层挂载 `search_knowledge_base`。
-RAG 是否实际可用取决于启动阶段 `bootstrap_rag` 是否成功，以及 `RAG_ENABLED` 配置。
+## 可选功能开关
 
-- 数据源：`source_dir/parsed_md/{topic}/*.md`（医学领域：`brain_tumor`、`chest_xray`、`skin_lesion`、`diabetes` 等 topic）
-- `RAG_ENABLED=false`：`search_knowledge_base` 会返回"知识检索服务未初始化"降级文案
-- `RAG_ENABLED=true` 且配置正确：工具返回 `answer + sources`
-- 幻觉防护：未调用 KB 工具却出现"知识库引用"话术时，自动标记为通用建议
+默认均可关闭，避免缺外部服务时影响主流程。
 
-> PDF → Markdown 的数据管道与 `_infer_category` 的 topic 识别逻辑详见 [`docs/bio-med-refactor-impl-plan.md`](docs/bio-med-refactor-impl-plan.md) 阶段 1。
+```env
+MULTIMODAL_ENABLED=true
+HITL_ENABLED=false
+ELEVENLABS_ENABLED=false
+MEM0_ENABLED=false
+HARNESS_ENABLED=false
+TAVILY_ENABLED=false
+```
 
-## 冒烟脚本
+- `MULTIMODAL_ENABLED`：图片上传与 VLM 摘要。
+- `HITL_ENABLED`：LangGraph interrupt 人工复核。
+- `ELEVENLABS_ENABLED`：STT/TTS 语音能力。
+- `MEM0_ENABLED`：长期记忆。
+- `HARNESS_ENABLED`：确定性安全约束与自动修复。
+- `TAVILY_ENABLED`：Web Search。
 
-- `src/tests/tmp_langgraph_smoke.py`：运行时基础冒烟
-- `src/tests/tmp_step1_smoke.py` ~ `tmp_step4_smoke.py`：RAG 分阶段冒烟
-- `src/tests/tmp_validate_kungpao.py`：RAG 检索命中验证
+## 开发与验证
+
+Python 语法检查示例：
+
+```bash
+python3 -m py_compile src/web/app.py src/services/chat_service.py src/graphs/swarm_graph.py
+```
+
+前端构建：
+
+```bash
+npm run build --prefix frontend
+```
+
+测试（依赖安装完整后）：
+
+```bash
+pytest -q src/tests
+```
 
 ## 常见问题
 
-- 启动时报 `Missing OPENAI_API_KEY`：检查 `.env` 是否在项目根目录且变量名正确。
-- Web 没有流式效果：确认 `AGENT_RUNTIME=langgraph` 且 `AGENT_STREAMING=true`。
-- 模型请求失败：优先检查 `OPENAI_BASE_URL`、代理网络、以及 API Key 可用性。
-- RAG 启动失败：查看启动日志中 `rag_bootstrap_failed` 的 reason 字段。
+- `ModuleNotFoundError`：确认已激活 `.venv` 并执行 `pip install -r requirements.txt`。
+- 启动时报 `Missing OPENAI_API_KEY`：检查 `.env` 是否存在且已填写真实 key。
+- Web 页面静态资源 404：执行 `npm run build --prefix frontend`，确认 `src/web/static/frontend/assets/` 存在。
+- RAG 未就绪：访问 `/health` 查看 `rag_reason`，优先检查 `RAG_SOURCE_DIRS`、embedding key 与索引目录。
+- 语音按钮不可用：确认 `ELEVENLABS_ENABLED=true` 且 `ELEVENLABS_API_KEY` 已配置。
+- HITL 不触发：确认 `HITL_ENABLED=true`，且当前回答路径设置了 `needs_human_validation`。

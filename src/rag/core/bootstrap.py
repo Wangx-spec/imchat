@@ -5,6 +5,7 @@ from config.settings import Settings
 from rag.core.config import build_rag_config, sanitize_rag_config, validate_rag_config
 from rag.core.service import RAGService
 
+from llms.openai_chat import build_openai_chat_model
 
 logger = logging.getLogger("chat.rag")
 
@@ -17,7 +18,9 @@ def bootstrap_rag(settings: Settings) -> tuple[bool, str]:
         cfg = sanitize_rag_config(build_rag_config(settings))
         validate_rag_config(cfg)
 
-        service = RAGService(cfg)
+        llm = build_openai_chat_model(settings)
+
+        service = RAGService(cfg, llm=llm)
         service.initialize(force_rebuild=cfg.rebuild)
         set_rag_service(service)
 

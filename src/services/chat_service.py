@@ -8,8 +8,26 @@ from db.messages import save_message
 from db.conversations import update_conversation, update_title
 
 from langchain_core.messages import HumanMessage
+from langgraph.types import Command
 import base64, mimetypes
 
+_INTERNAL_STREAM_NODES = {
+    "supervisor",
+    "image_input_guardrail",
+    "image_caption",
+    "input_guardrail",
+    "triage",
+    "decompose",
+    "worker",
+}
+
+_FINAL_STREAM_NODES = {
+    "single",
+    "image",
+    "synthesize",
+    "output_guardrail",
+    "hitl_node"
+}
 setup_logging()
 
 _KB_CLAIM_PAT = re.compile(r"(根据知识库|知识库中|参考文档|来源：|source_dir|\.md)", re.IGNORECASE)
@@ -20,6 +38,104 @@ _agent: Any = None
 _settings: Any = None
 _runtime: str = ""
 _SESSION_LOCKS: dict[str, Lock] = {}
+
+
+def _chunk_event_for_text(text: str, sent_answer: str) -> tuple[str, str]:
+    is_prefix = text.startswith(sent_answer)
+    delta = text[len(sent_answer):] if is_prefix else text
+    payload: dict[str, Any] = {"text": delta}
+    if not is_prefix:
+        payload["replace"] = True
+    return sse_event("chunk", payload), text
+
+
+def resume_stream(session_id: str, decision: str, note: str = "") -> Generator[str, None, None]:
+    latest_answer = ""
+    collected_tool_calls: list[dict] = []
+    interrupted = False
+    try:
+        cmd = Command(resume={"decision": decision, "note": note})
+        latest_answer, collected_tool_calls, interrupted = yield from _stream_langgraph_updates(
+            session_id=session_id,
+            inputs=cmd,
+            current_user_message="",  # resume 无新的 human 文本
+        )
+        if interrupted:
+            return
+        if latest_answer:
+            latest_answer = sanitize_ungrounded_kb_claim(latest_answer, collected_tool_calls)
+            yield sse_event("done", {"answer": latest_answer})
+    except Exception as exc:
+        yield sse_event("error", {"detail": str(exc)})
+    finally:
+        if latest_answer and not interrupted:
+            save_message(session_id, "assistant", latest_answer)
+            update_conversation(session_id)
+
+def _stream_langgraph_updates(
+    session_id: str,
+    inputs: dict,
+    current_user_message: str,
+) -> Generator[str, None, tuple[str, list[dict], bool]]:
+    latest_answer = ""
+    sent_answer = ""
+    collected_tool_calls: list[dict] = []
+    stream_deferred = _runtime in {"langgraph-multi", "langgraph-swarm"}
+
+    for update in _agent.stream(
+        inputs,
+        config={"configurable": {"thread_id": session_id}},
+        stream_mode="updates",
+    ):
+        if not isinstance(update, dict):
+            continue
+
+        if "__interrupt__" in update:
+            interrupts = update.get("__interrupt__") or []
+            first = interrupts[0] if interrupts else None
+            payload = getattr(first, "value", first)
+            yield sse_event("hitl", {"interrupt": payload})
+            return latest_answer, collected_tool_calls, True
+
+        for node_name, node_state in update.items():
+            if _should_skip_stream_node(node_name):
+                continue
+            if not isinstance(node_state, dict):
+                continue
+
+            turn_messages = _current_turn_messages(
+                node_state.get("messages", []),
+                current_user_message,
+            )
+            for msg in turn_messages:
+                _extend_tool_calls_unique(
+                    collected_tool_calls,
+                    extract_tool_calls_from_message(msg),
+                )
+                if getattr(msg, "type", "") != "ai":
+                    continue
+
+                text = extract_text_from_content(getattr(msg, "content", "")).strip()
+                if not text:
+                    continue
+
+                latest_answer = text
+                if stream_deferred:
+                    continue
+
+                if text != sent_answer:
+                    event, sent_answer = _chunk_event_for_text(text, sent_answer)
+                    yield event
+
+    if stream_deferred and latest_answer and latest_answer != sent_answer:
+        yield sse_event("chunk", {"text": latest_answer})
+
+    return latest_answer, collected_tool_calls, False
+
+
+def _invoke_agent_with_inputs(session_id: str, inputs: dict) -> tuple[str, list[dict]]:
+    result = _agent.invoke(inputs, config={"configurable": {"thread_id": session_id}})
+    return extract_text_from_result(result), extract_tool_calls(result)
 
 def _attachment_to_data_url(path: str) -> str:
     mime, _ = mimetypes.guess_type(path)
@@ -58,44 +174,19 @@ def stream_multimodal(
     save_message(session_id, "user", (message + ("\n" + note if note else "")).strip() or note)
 
     latest_answer = ""
-    sent_answer = ""
     collected_tool_calls: list[dict] = []
+    interrupted = False
     inputs = _build_multimodal_input(message, attachments)
 
     try:
         if _runtime.startswith("langgraph") and _settings.agent_streaming:
-            stream_multi = _runtime == "langgraph-multi"
-            for update in _agent.stream(
+            latest_answer, collected_tool_calls, interrupted = yield from _stream_langgraph_updates(
+                session_id,
                 inputs,
-                config={"configurable": {"thread_id": session_id}},
-                stream_mode="updates",
-            ):
-                if not isinstance(update, dict):
-                    continue
-                for node_name, node_state in update.items():
-                    if node_name in {"supervisor", "image_input_guardrail", "image_caption"}:
-                        continue
-                    if not isinstance(node_state, dict):
-                        continue
-                    turn_messages = _current_turn_messages(node_state.get("messages", []), saved_text)
-                    for msg in turn_messages:
-                        _extend_tool_calls_unique(collected_tool_calls, extract_tool_calls_from_message(msg))
-                        if getattr(msg, "type", "") == "ai":
-                            text = extract_text_from_content(getattr(msg, "content", "")).strip()
-                            if not text:
-                                continue
-                            latest_answer = text
-                            if stream_multi:
-                                continue
-                            if text != sent_answer:
-                                is_prefix = text.startswith(sent_answer)
-                                delta = text[len(sent_answer):] if is_prefix else text
-                                sent_answer = text
-                                if delta:
-                                    payload: dict[str, Any] = {"text": delta}
-                                    if not is_prefix:
-                                        payload["replace"] = True
-                                    yield sse_event("chunk", payload)
+                saved_text,
+            )
+            if interrupted:
+                return
             if not latest_answer:
                 latest_answer, collected_tool_calls = _invoke_agent_with_inputs(session_id, inputs)
                 latest_answer = _sanitize_echo_answer(latest_answer, message)
@@ -112,15 +203,10 @@ def stream_multimodal(
         logger.exception("[CHAT_MM_STREAM_ERROR] session=%s error=%s", session_id, exc)
         yield sse_event("error", {"detail": str(exc)})
     finally:
-        if latest_answer:
+        if latest_answer and not interrupted:
             save_message(session_id, "assistant", latest_answer)
             update_conversation(session_id)
             set_title(session_id, message or "（图片对话）")
-
-
-def _invoke_agent_with_inputs(session_id: str, inputs: dict) -> tuple[str, list[dict]]:
-    result = _agent.invoke(inputs, config={"configurable": {"thread_id": session_id}})
-    return extract_text_from_result(result), extract_tool_calls(result)
 
 def try_acquire_session(session_id: str) -> bool:
     sid = (session_id or "").strip()
@@ -182,7 +268,13 @@ def _tool_call_key(call: dict) -> tuple[str, str]:
         return name, json.dumps(args, sort_keys=True, ensure_ascii=False)
     except TypeError:
         return name, str(args)
-
+        
+def _should_skip_stream_node(node_name: str) -> bool:
+    if node_name in _INTERNAL_STREAM_NODES:
+        return True
+    if _runtime == "langgraph-swarm" and node_name not in _FINAL_STREAM_NODES:
+        return True
+    return False
 
 def _extend_tool_calls_unique(bucket: list[dict], new_calls: list[dict]) -> None:
     seen = {_tool_call_key(c) for c in bucket}
@@ -199,13 +291,19 @@ def _current_turn_messages(messages: list[Any], current_user_message: str) -> li
         return []
 
     target = (current_user_message or "").strip()
+    fallback_idx = None
+
     for idx in range(len(messages) - 1, -1, -1):
         msg = messages[idx]
         if getattr(msg, "type", "") != "human":
             continue
+        fallback_idx = idx
         content = extract_text_from_content(getattr(msg, "content", "")).strip()
-        if content == target:
+        if content == target or (target and content and (content in target or target in content)):
             return messages[idx + 1 :]
+
+    if fallback_idx is not None:
+        return messages[fallback_idx + 1 :]
     return []
 
 def extract_text_from_result(result: dict) -> str:
@@ -237,7 +335,11 @@ def _sanitize_echo_answer(answer: str, user_message: str) -> str:
         return "本轮未生成有效回答，请重试或换个问法。"
     return text
 
-_KB_GROUNDED_TOOLS = {"search_medical_kb", "search_knowledge_base"}
+_KB_GROUNDED_TOOLS = {
+    "search_knowledge",
+    "search_medical_kb",
+    "search_knowledge_base",
+}
 
 def has_kb_tool_call(tool_calls: list[dict]) -> bool:
     for c in tool_calls:
@@ -299,48 +401,16 @@ def stream(session_id: str, message: str) -> Generator[str, None, None]:
     """SSE 流式生成器，controller 直接 yield from 即可。"""
     save_message(session_id, "user", message)
     latest_answer = ""
-    sent_answer = ""
-    collected_tool_calls: list[dict] = []
+    interrupted = False
     try:
         if _runtime.startswith("langgraph") and _settings.agent_streaming:
-            stream_multi = _runtime == "langgraph-multi"
-            for update in _agent.stream(
+            latest_answer, collected_tool_calls, interrupted = yield from _stream_langgraph_updates(
+                session_id,
                 {"messages": [("user", message)]},
-                config={"configurable": {"thread_id": session_id}},
-                stream_mode="updates",
-            ):
-                if not isinstance(update, dict):
-                    continue
-                for node_name, node_state in update.items():
-                    if node_name == "supervisor":
-                        continue
-                    if not isinstance(node_state, dict):
-                        continue
-                    turn_messages = _current_turn_messages(
-                        node_state.get("messages", []),
-                        message,
-                    )
-                    for msg in turn_messages:
-                        _extend_tool_calls_unique(
-                            collected_tool_calls,
-                            extract_tool_calls_from_message(msg),
-                        )
-                        if getattr(msg, "type", "") == "ai":
-                            text = extract_text_from_content(getattr(msg, "content", "")).strip()
-                            if not text:
-                                continue
-                            latest_answer = text
-                            if stream_multi:
-                                continue
-                            if text != sent_answer:
-                                is_prefix = text.startswith(sent_answer)
-                                delta = text[len(sent_answer) :] if is_prefix else text
-                                sent_answer = text
-                                if delta:
-                                    payload: dict[str, Any] = {"text": delta}
-                                    if not is_prefix:
-                                        payload["replace"] = True
-                                    yield sse_event("chunk", payload)
+                message,
+            )
+            if interrupted:
+                return
             if not latest_answer:
                 latest_answer, collected_tool_calls = _invoke_agent(session_id, message)
                 latest_answer = _sanitize_echo_answer(latest_answer, message)
@@ -356,7 +426,7 @@ def stream(session_id: str, message: str) -> Generator[str, None, None]:
         logger.exception("[CHAT_STREAM_ERROR] session=%s error=%s", session_id, exc)
         yield sse_event("error", {"detail": str(exc)})
     finally:
-        if latest_answer:
+        if latest_answer and not interrupted:
             save_message(session_id, "assistant", latest_answer)
             update_conversation(session_id)
             set_title(session_id, message)

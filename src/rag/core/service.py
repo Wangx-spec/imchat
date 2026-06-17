@@ -9,7 +9,7 @@ from rag.core.types import AnswerResult, RAGConfig, RetrievalResult
 from rag.generation.generation_router import GenerationRouter
 from rag.ingestion.chunking import ParentChildChunker
 from rag.ingestion.data_loader import MarkdownDataLoader
-from rag.retrieval.index_store import LocalFAISSIndexStore
+from rag.retrieval.index_store import build_index_store
 from rag.retrieval.query_planner import LLMQueryPlanner, QueryPlan
 from rag.retrieval.retriever import HybridRetriever
 
@@ -18,15 +18,15 @@ logger = logging.getLogger(__name__)
 
 class RAGService:
 
-    def __init__(self, cfg: RAGConfig) -> None:
+    def __init__(self, cfg: RAGConfig, llm: Any | None = None) -> None:
         # 配置先做一次sanitize，避免后续参数异常
         self.cfg = sanitize_rag_config(cfg)
         self.ready = False
 
         self.loader = MarkdownDataLoader()
         self.chunker = ParentChildChunker(self.cfg.chunk_size, self.cfg.chunk_overlap)
-        self.index_store = LocalFAISSIndexStore(self.cfg)
-        self.router = GenerationRouter()
+        self.index_store = build_index_store(self.cfg)
+        self.router = GenerationRouter(llm=llm)
         self.query_planner: LLMQueryPlanner | None = None
 
         self.retriever: HybridRetriever | None = None
@@ -216,6 +216,8 @@ class RAGService:
                 source_lines = "\n".join([f"- {s}" for s in top_sources]) if top_sources else "- 无"
                 blocked_answer = build_blocked_answer(source_lines)
                 debug["low_confidence_blocked"] = True
+                debug["insufficient_info"] = True
+                debug["insufficient_reason"] = "low_confidence"
                 logger.info(
                     "[ANSWER_GUARD] query=%r route=%s should_block=%s confidence_score=%.3f is_confident=%s direct_hit_count=%s semantic_overlap=%s low_confidence_blocked=%s variant_queries=%s direct_hit_titles=%s",
                     query,
@@ -235,6 +237,7 @@ class RAGService:
                     answer=blocked_answer,
                     sources=ret.sources,
                     debug=debug,
+                    insufficient_info=True
                 )
 
             logger.info(
@@ -251,13 +254,17 @@ class RAGService:
                 debug.get("direct_hit_titles", []),
             )
             answer_text = self.router.build_answer(query, route, ret.parents)
+            insufficient_info = self.router.is_insufficient_answer(answer_text)
+            debug["insufficient_info"] = insufficient_info
+
             return AnswerResult(
-                query=query,
-                route=route,
-                answer=answer_text,
-                sources=ret.sources,
-                debug=debug,
-            )
+                query=query, 
+                route=route, 
+                answer=answer_text, 
+                sources=ret.sources, 
+                debug=debug, 
+                insufficient_info=insufficient_info
+                )
         except Exception as exc:
             logger.exception("RAG answer failed: %s", exc)
             return AnswerResult(

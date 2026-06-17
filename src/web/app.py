@@ -13,6 +13,7 @@ from config.settings import load_settings
 from agents.dialog_agent import build_dialog_runtime
 from config.logging_setup import setup_logging
 from services.chat_service import init as chat_service_init
+from services import speech_service
 
 from db.connection import init_postgres_pool
 
@@ -53,12 +54,21 @@ app.mount(
 )
 
 _index_file = Path(__file__).resolve().parent / "static" / "index.html"
+_frontend_assets_dir = Path(__file__).resolve().parent / "static" / "frontend"
 _rag_status = {"ok": False, "reason": "not_bootstrapped"}
 
 system_init(_runtime, _index_file, _rag_status)
 
+if _frontend_assets_dir.exists():
+    app.mount(
+        "/frontend",
+        StaticFiles(directory=str(_frontend_assets_dir)),
+        name="frontend_assets",
+    )
+
 @app.on_event("startup")
 def on_startup() -> None:
+    speech_service.init(_settings)
 
     if _settings.postgres_uri:
         init_postgres_pool(_settings.postgres_uri)

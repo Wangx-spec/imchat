@@ -27,6 +27,7 @@ def _build_kb_payload(
     route: str | None = None,
     debug: dict[str, Any] | None = None,
     error: str | None = None,
+    insufficient_info: bool = False,
 ) -> str:
     srcs = sources or []
     payload = {
@@ -39,6 +40,7 @@ def _build_kb_payload(
         "route": route,
         "debug": debug or {},
         "error": error,
+        "insufficient_info": insufficient_info,
     }
     return json.dumps(payload, ensure_ascii=False)
 
@@ -66,7 +68,8 @@ def _search_medical_kb_impl(query: str, tool_name: str) -> str:
             sources=getattr(result, "sources", []),
             route=getattr(result, "route", None),
             debug=getattr(result, "debug", {}),
-            error=None
+            error=None,
+            insufficient_info=getattr(result, "insufficient_info", False),
         )
         logger.info("[TOOL_RESULT] name=%s ok", tool_name)
         return text

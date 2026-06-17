@@ -1,17 +1,40 @@
 from __future__ import annotations
 
+import re
+
 from pathlib import Path
 from llms.qwen_vl import QwenVLClient
 from rag.ingestion.pdf_parser import ParsedPdfDoc
 
+_MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 
-def _normalize_text(text: str) -> str:
-    lines = [line.rstrip() for line in text.splitlines()]
-    return "\n".join(lines).strip()
 
-def _image_id_format(image_path: str, page_idx: int, image_idx: int) -> str:
-    stem = Path(image_path).stem
-    return f"{stem}_p{page_idx}_f{image_idx}"
+def _summary_block_for_image(
+    image_name: str,
+    image_path: str,
+    *,
+    vlm: QwenVLClient | None,
+    static_url_prefix: str,
+    assets_root: Path | None,
+) -> str | None:
+    if not vlm:
+        return None
+    
+    cap = vlm.summarize_image(image_path=image_path)
+    if not cap.ok or cap.image_type == "unsupported" or not cap.caption.strip():
+        return None 
+    image_id = _sanitize_image_id(image_name)
+    image_url = _image_url_format(image_path, static_url_prefix=static_url_prefix, assets_root=assets_root)
+
+    return "\n".join(
+        _render_image_block(
+            image_id=image_id,
+            image_url=image_url,
+            image_type=cap.image_type,
+            is_medical=cap.is_medical,
+            caption=cap.caption.strip(),
+        )
+    )
 
 def _image_url_format(
     image_path: str,
@@ -50,40 +73,6 @@ def _render_image_block(
         "",
     ]
 
-def _append_page_images(
-    parts: list[str],
-    *,
-    page_idx: int,
-    image_paths: list[str],
-    vlm: QwenVLClient | None,
-    static_url_prefix: str,
-    assets_root: Path | None,
-) -> None:
-    if not image_paths or vlm is None:
-        return
-    for image_idx, image_path in enumerate(image_paths, start=1):
-        caption_obj = vlm.summarize_image(image_path=image_path)
-        if not caption_obj.ok:
-            continue
-        if caption_obj.image_type == "unsupported":
-            continue
-        if not caption_obj.caption.strip():
-            continue
-        image_id = _image_id_format(image_path, page_idx, image_idx)
-        image_url = _image_url_format(
-            image_path,
-            static_url_prefix=static_url_prefix,
-            assets_root=assets_root,
-        )
-        parts.extend(
-            _render_image_block(
-                image_id=image_id,
-                image_url=image_url,
-                image_type=caption_obj.image_type,
-                is_medical=caption_obj.is_medical,
-                caption=caption_obj.caption.strip(),
-            )
-        )
 
 def render_markdown(
     parsed_doc: ParsedPdfDoc,
@@ -94,45 +83,53 @@ def render_markdown(
     assets_root: Path | None = None,
 ) -> str:
     title = (parsed_doc.title or Path(parsed_doc.source_path).stem).strip()
-    source_pdf = parsed_doc.source_path.strip()
-    parts: list[str] = [
+    header: list[str] = [
         f"# {title}",
         "",
-        f"> Source PDF: {source_pdf}",
+        f"> Source PDF: {parsed_doc.source_path.strip()}",
         f"> Topic: {topic}",
         "> Origin Type: pdf",
         "> Source Format: markdown_from_pdf",
         "",
     ]
-    page_count = max(len(parsed_doc.pages), len(parsed_doc.images or []))
-    if page_count > 0:
-        for idx in range(page_count):
-            page_no = idx + 1
-            page_text = ""
-            if idx < len(parsed_doc.pages):
-                page_text = _normalize_text(parsed_doc.pages[idx])
-            image_paths: list[str] = []
-            if idx < len(parsed_doc.images):
-                image_paths = parsed_doc.images[idx] or []
-            parts.append(f"## Page {page_no}")
-            parts.append("")
-            if page_text:
-                parts.append(page_text)
-                parts.append("")
-            _append_page_images(
-                parts,
-                page_idx=page_no,
-                image_paths=image_paths,
-                vlm=vlm,
-                static_url_prefix=static_url_prefix,
-                assets_root=assets_root,
-            )
-            parts.append("---")
-            parts.append("")
-    else:
-        raw_text = _normalize_text(parsed_doc.raw_text)
-        parts.append("## Content")
-        parts.append("")
-        parts.append(raw_text if raw_text else "_No extractable text._")
-        parts.append("")
-    return "\n".join(parts).strip() + "\n"
+
+    used: set[str] = set()
+
+    def _replace(m: re.Match) -> str:
+        name = m.group(1).strip()
+        path = parsed_doc.images.get(name) or parsed_doc.images.get(Path(name).name)
+        if not path:
+            return m.group(0)
+        
+        used.add(name)
+        block = _summary_block_for_image(
+            name, path, vlm=vlm,
+            static_url_prefix=static_url_prefix,
+            assets_root=assets_root
+        )
+        return block if block else m.group(0)
+    
+    body = _MD_IMAGE_RE.sub(_replace, parsed_doc.markdown)
+
+    # 兜底： Marker没在正文引用到的图片，统一追加到文末
+    tail: list[str] = []
+    for name, path in parsed_doc.images.items():
+        if name in used:
+            continue
+            
+        block = _summary_block_for_image(
+            name, path, vlm=vlm,
+            static_url_prefix=static_url_prefix,
+            assets_root=assets_root
+        )
+        if block:
+            tail.append(block)
+
+    parts = ["\n".join(header), body.strip()]
+    if tail:
+        parts.append("## 未定位图片\n\n" + "\n\n".join(tail))
+    return "\n\n".join(parts).strip() + "\n"
+
+def _sanitize_image_id(name: str) -> str:
+    stem = Path(name).name
+    return re.sub(r"[^\w\-.]", "_", stem)

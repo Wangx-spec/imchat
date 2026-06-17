@@ -4,6 +4,9 @@ from langchain_core.documents import Document
 
 
 class GenerationRouter:
+    def __init__(self, llm=None, max_context_chars: int = 6000) -> None:
+        self.llm = llm
+        self.max_context_chars = max_context_chars
 
     def _collect_image_refs(self, parents: list[Document], max_imgs: int = 5) -> list[dict]:
         out: list[dict] = []
@@ -70,20 +73,83 @@ class GenerationRouter:
             return query.strip()
         return " ".join(query.split()).strip()
 
+    def is_insufficient_answer(self, answer: str) -> bool:
+        text = (answer or "").lower()
+        patterns = [
+            "信息不足",
+            "资料不足",
+            "未检索到",
+            "无法确定",
+            "无法回答",
+            "insufficient information",
+            "not enough information",
+        ]
+        return any(p in text for p in patterns)
+
+    def _build_context(self, parents: list[Document]) -> str:
+        blocks = []
+        total = 0
+
+        for i, p in enumerate(parents, start=1):
+            title = str(p.metadata.get("title", "未知标题"))
+            source = str(p.metadata.get("source", ""))
+            content = p.page_content.strip()
+
+            images = p.metadata.get("images") or []
+            image_lines = []
+            for img in images:
+                cap = (img.get("caption") or "").strip()
+                path = (img.get("image_path") or "").strip()
+                if cap or path:
+                    image_lines.append(f"- 图片：{cap} {path}".strip())
+
+            block = f"[{i}] 标题：{title}\n来源：{source}\n内容：{content}"
+            if image_lines:
+                block += "\n相关图片：\n" + "\n".join(image_lines)
+
+            # if total + len(block) > self.max_context_chars:
+            #     break
+            remaining = self.max_context_chars - total
+            if remaining <= 0:
+                break
+
+            if len(block) > remaining:
+                block = block[:remaining].rstrip() + "\n...（上下文已截断）"
+            
+            blocks.append(block)
+            total += len(block)
+
+        return "\n\n".join(blocks)
+
+    def _build_llm_answer(self, query: str, route: str, parents: list[Document]) -> str:
+        context = self._build_context(parents)
+        prompt = f"""你是严谨的医学知识库回答生成器。
+            要求：
+            1. 只能依据【检索上下文】回答，不要编造未出现的事实。
+            2. 如果上下文不足以回答，明确说“信息不足”，并说明缺少什么。
+            3. 医学问题不能给出确诊或处方，只能做知识解释和就医建议。
+            4. 尽量引用上下文编号，例如 [1]、[2]。
+            5. 使用中文回答。
+            问题：
+            {query}
+            检索上下文：
+            {context}
+        """
+        resp = self.llm.invoke(prompt)
+        text = getattr(resp, "content", "")
+        return text.strip() or "信息不足：生成器未返回有效回答。"      
+
     def build_answer(self, query: str, route: str, parents: list[Document]) -> str:
         if not parents:
             return "未检索到相关内容，请尝试换个问法。"
 
-        if route == "list":
-            body = self._build_list_answer(query, parents)
-        elif route == "detail":
-            body = self._build_detail_answer(query, parents)
-        else:
-            body = self._build_general_answer(query, parents)
+        if self.llm is None:
+            return "信息不足：生成模型未初始化，暂时无法基于检索内容作答，建议改用联网搜索。"
 
+        body = self._build_llm_answer(query, route, parents)
         body = self._append_references(body, parents, max_refs=5)
         body = self._append_image_references(body, parents, max_imgs=5)
-        # 统一在回答尾部附上引用文档
+
         return body
 
     def _collect_references(self, parents: list[Document], max_refs: int = 5) -> list[tuple[str, str]]:
@@ -115,41 +181,3 @@ class GenerationRouter:
                 lines.append(f"[{i}] {title}")
         return "\n".join(lines)
 
-    def _build_list_answer(self, query: str, parents: list[Document]) -> str:
-        lines = [f"基于检索结果，整理出以下相关条目（问题：{query}）："]
-        seen: set[str] = set()
-        idx = 1
-        for p in parents:
-            title = str(p.metadata.get("title", "")).strip() or "未知标题"
-            if title in seen:
-                continue
-            seen.add(title)
-            snippet = p.page_content.strip().replace("\n", " ")[:120]
-            lines.append(f"{idx}. {title}")
-            if snippet:
-                lines.append(f"   摘要：{snippet}")
-            idx += 1
-            if idx > 5:
-                break
-        return "\n".join(lines)
-
-    def _build_detail_answer(self, query: str, parents: list[Document]) -> str:
-        p0 = parents[0]
-        title = str(p0.metadata.get("title", "未知标题"))
-        content = p0.page_content.strip()
-        preview = content[:1000]
-
-        return (
-            f"问题：{query}\n\n"
-            f"【命中内容】{title}\n\n"
-            f"{preview}"
-        )
-
-    def _build_general_answer(self, query: str, parents: list[Document]) -> str:
-        lines = [f"问题：{query}", "基于检索到的相关文档，给出如下信息："]
-        for i, p in enumerate(parents[:3], start=1):
-            title = str(p.metadata.get("title", "未知标题"))
-            snippet = p.page_content.strip().replace("\n", " ")[:180]
-            lines.append(f"{i}) {title}")
-            lines.append(f"   摘要：{snippet}")
-        return "\n".join(lines)

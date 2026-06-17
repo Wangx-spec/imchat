@@ -2,9 +2,13 @@ from pathlib import Path
 import shutil
 import uuid
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
+from typing import Literal, Optional
+from services.chat_service import resume_stream
+from services import speech_service
+
 from config.settings import load_settings
 from services.chat_service import (
     invoke,
@@ -40,6 +44,19 @@ class ResetRequest(BaseModel):
 
 class NewConversationResponse(BaseModel):
     session_id: str
+
+class HitlResumeRequest(BaseModel):
+    session_id: str
+    decision: str  # approve / reject / revise
+    note: str = ""
+
+
+class TTSRequest(BaseModel):
+    text: str
+
+
+class STTResponse(BaseModel):
+    text: str
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -144,6 +161,54 @@ async def chat_multimodal_stream(
         guarded_stream(),
         media_type="text/event-stream",
     )
+
+@router.post("/chat/hitl/resume")
+def chat_hitl_resume(payload: HitlResumeRequest) -> StreamingResponse:
+    sid = payload.session_id.strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    if not try_acquire_session(sid):
+        raise HTTPException(status_code=409, detail="This conversation is already processing another request.")
+    def guarded_stream():
+        try:
+            yield from resume_stream(sid, payload.decision.strip(), payload.note.strip())
+        finally:
+            release_session(sid)
+    return StreamingResponse(guarded_stream(), media_type="text/event-stream")
+
+
+@router.post("/speech/tts")
+def speech_tts(payload: TTSRequest) -> Response:
+    settings = load_settings()
+    if not settings.elevenlabs_enabled:
+        raise HTTPException(status_code=400, detail="speech feature disabled by config")
+    text = payload.text.strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="text cannot be empty")
+    try:
+        audio_bytes = speech_service.text_to_speech(text)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return Response(content=audio_bytes, media_type="audio/mpeg")
+
+
+@router.post("/speech/stt", response_model=STTResponse)
+async def speech_stt(audio: UploadFile = File(...)) -> STTResponse:
+    settings = load_settings()
+    if not settings.elevenlabs_enabled:
+        raise HTTPException(status_code=400, detail="speech feature disabled by config")
+    try:
+        data = await audio.read()
+        if not data:
+            raise HTTPException(status_code=400, detail="audio file is empty")
+        text = speech_service.speech_to_text(data, mime_type=audio.content_type or None)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return STTResponse(text=text)
 
 
 async def _persist_uploaded_images(session_id: str, files: list[UploadFile], settings) -> list[dict]:

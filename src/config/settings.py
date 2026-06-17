@@ -18,6 +18,14 @@ class Settings:
     agent_runtime: str = "langgraph"
     agent_streaming: bool = True
     agent_use_langgraph_memory: bool = True
+    hitl_action: str = "interrupt"  # "interrupt" | "warn" | "off"
+    hitl_resume_default: str = "approve"
+    elevenlabs_enabled: bool = False
+    elevenlabs_api_key: str | None = None
+    elevenlabs_voice_id: str = "Rachel"
+    elevenlabs_tts_model: str = "eleven_multilingual_v2"
+    elevenlabs_stt_model: str = "scribe_v1"
+    elevenlabs_timeout_ms: int = 30000
 
     # 多模态
     multimodal_enabled: bool = False
@@ -48,6 +56,10 @@ class Settings:
     rag_embedding_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     rag_embedding_model: str = "text-embedding-v4"
     rag_embedding_dimensions: int = 1024
+    vector_db_provider: str = "faiss"  # "faiss" | "qdrant"
+    qdrant_url: str | None = None
+    qdrant_api_key: str | None = None
+    qdrant_collection: str = "rag_documents"
     rag_chunk_size: int = 800
     rag_chunk_overlap: int = 120
     rag_rrf_k: int = 60
@@ -69,9 +81,16 @@ class Settings:
     rag_rerank_device: str = "cpu"    # "cpu" | "cuda" | "mps"
     postgres_uri: str | None = None
     enabled_skills: list[str] | None = None    # 新增
-    agent_mode: str = "single"  # "single" | "multi"
     guardrails_enabled: bool = True
+    harness_enabled: bool = False
+    harness_max_repair: int = 1
     supervisor_confidence_threshold: float = 0.6
+    triage_confidence_threshold: float = 0.75
+    image_analysis_enabled: bool = False
+    hitl_enabled: bool = False
+    mem0_enabled: bool = False
+    mem0_api_key: str | None = None
+    mem0_user_scope: str = "session"  # "session" | "global"
 
     agent_mode: str = "single"  # "single" | "multi" | "swarm"
     swarm_max_workers: int = 3
@@ -96,6 +115,12 @@ def load_settings() -> Settings:
     base_url = os.getenv("OPENAI_BASE_URL", "").strip() or None
     verbose = os.getenv("AGENT_VERBOSE", "false").lower() in {"1", "true", "yes"}
     agent_use_langgraph_memory = _parse_bool("AGENT_USE_LANGGRAPH_MEMORY", True)
+    elevenlabs_enabled = _parse_bool("ELEVENLABS_ENABLED", False)
+    elevenlabs_api_key = os.getenv("ELEVENLABS_API_KEY", "").strip() or None
+    elevenlabs_voice_id = os.getenv("ELEVENLABS_VOICE_ID", "Rachel").strip() or "Rachel"
+    elevenlabs_tts_model = os.getenv("ELEVENLABS_TTS_MODEL", "eleven_multilingual_v2").strip() or "eleven_multilingual_v2"
+    elevenlabs_stt_model = os.getenv("ELEVENLABS_STT_MODEL", "scribe_v1").strip() or "scribe_v1"
+    elevenlabs_timeout_ms = _parse_int("ELEVENLABS_TIMEOUT_MS", 30000, 1000)
 
     multimodal_enabled = _parse_bool("MULTIMODAL_ENABLED", False)
     multimodal_provider = os.getenv("MULTIMODAL_PROVIDER", "dashscope").strip().lower() or "dashscope"
@@ -131,6 +156,13 @@ def load_settings() -> Settings:
 
     rag_top_k = _parse_int("RAG_TOP_K", 4, 1)
     rag_retrieval_k = _parse_int("RAG_RETRIEVAL_K", 12, 1)
+    vector_db_provider = os.getenv("VECTOR_DB_PROVIDER", "faiss").strip().lower() or "faiss"
+    if vector_db_provider not in {"faiss", "qdrant"}:
+        logger.warning("Invalid VECTOR_DB_PROVIDER=%r, fallback to faiss", vector_db_provider)
+        vector_db_provider = "faiss"
+    qdrant_url = os.getenv("QDRANT_URL", "").strip() or None
+    qdrant_api_key = os.getenv("QDRANT_API_KEY", "").strip() or None
+    qdrant_collection = os.getenv("QDRANT_COLLECTION", "rag_documents").strip() or "rag_documents"
     rag_chunk_size = _parse_int("RAG_CHUNK_SIZE", 800, 100)
     rag_chunk_overlap = _parse_int("RAG_CHUNK_OVERLAP", 120, 0)
     rag_rrf_k = _parse_int("RAG_RRF_K", 60, 1)
@@ -169,7 +201,23 @@ def load_settings() -> Settings:
     enabled_skills = enabled_skills_raw if enabled_skills_raw else None
 
     guardrails_enabled = _parse_bool("GUARDRAILS_ENABLED", True)
+    harness_enabled = _parse_bool("HARNESS_ENABLED", False)
+    harness_max_repair = _parse_int("HARNESS_MAX_REPAIR", 1, 0)
     supervisor_confidence_threshold = _parse_float("SUPERVISOR_CONFIDENCE_THRESHOLD", 0.6, 0.0, 1.0)
+    triage_confidence_threshold = _parse_float("TRIAGE_CONFIDENCE_THRESHOLD", 0.75, 0.0, 1.0)
+    image_analysis_enabled = _parse_bool("IMAGE_ANALYSIS_ENABLED", multimodal_enabled)
+    hitl_enabled = _parse_bool("HITL_ENABLED", False)
+    mem0_enabled = _parse_bool("MEM0_ENABLED", False)
+    mem0_api_key = os.getenv("MEM0_API_KEY", "").strip() or None
+    mem0_user_scope = os.getenv("MEM0_USER_SCOPE", "session").strip().lower() or "session"
+    if mem0_user_scope not in {"session", "global"}:
+        logger.warning("Invalid MEM0_USER_SCOPE=%r, fallback to session", mem0_user_scope)
+        mem0_user_scope = "session"
+    hitl_action = os.getenv("HITL_ACTION", "interrupt").strip().lower() or "interrupt"
+    if hitl_action not in {"interrupt", "warn", "off"}:
+        logger.warning("Invalid HITL_ACTION=%r, fallback to interrupt", hitl_action)
+        hitl_action = "interrupt"
+    hitl_resume_default = os.getenv("HITL_RESUME_DEFAULT", "approve").strip().lower() or "approve"
 
     agent_mode = os.getenv("AGENT_MODE", "single").strip().lower()
     if agent_mode not in {"single", "multi", "swarm"}:
@@ -197,6 +245,12 @@ def load_settings() -> Settings:
         agent_runtime=_parse_runtime("AGENT_RUNTIME", "langgraph"),
         agent_streaming=_parse_bool("AGENT_STREAMING", True),
         agent_use_langgraph_memory=agent_use_langgraph_memory,
+        elevenlabs_enabled=elevenlabs_enabled,
+        elevenlabs_api_key=elevenlabs_api_key,
+        elevenlabs_voice_id=elevenlabs_voice_id,
+        elevenlabs_tts_model=elevenlabs_tts_model,
+        elevenlabs_stt_model=elevenlabs_stt_model,
+        elevenlabs_timeout_ms=elevenlabs_timeout_ms,
         multimodal_enabled=multimodal_enabled,
         multimodal_provider=multimodal_provider,
         multimodal_model=multimodal_model,
@@ -224,6 +278,10 @@ def load_settings() -> Settings:
         ).strip() or "https://dashscope.aliyuncs.com/compatible-mode/v1",
         rag_embedding_model=os.getenv("RAG_EMBEDDING_MODEL", "text-embedding-v4").strip() or "text-embedding-v4",
         rag_embedding_dimensions=rag_embedding_dimensions,
+        vector_db_provider=vector_db_provider,
+        qdrant_url=qdrant_url,
+        qdrant_api_key=qdrant_api_key,
+        qdrant_collection=qdrant_collection,
         rag_chunk_size=rag_chunk_size,
         rag_chunk_overlap=rag_chunk_overlap,
         rag_rrf_k=rag_rrf_k,
@@ -244,7 +302,17 @@ def load_settings() -> Settings:
         enabled_skills=enabled_skills,
         agent_mode=agent_mode,
         guardrails_enabled=guardrails_enabled,
+        harness_enabled=harness_enabled,
+        harness_max_repair=harness_max_repair,
         supervisor_confidence_threshold=supervisor_confidence_threshold,
+        triage_confidence_threshold=triage_confidence_threshold,
+        image_analysis_enabled=image_analysis_enabled,
+        hitl_enabled=hitl_enabled,
+        mem0_enabled=mem0_enabled,
+        mem0_api_key=mem0_api_key,
+        mem0_user_scope=mem0_user_scope,
+        hitl_action=hitl_action,
+        hitl_resume_default=hitl_resume_default,
         
         rag_rerank_backend=rag_rerank_backend,
         rag_rerank_local_model=rag_rerank_local_model,
@@ -276,7 +344,7 @@ def _parse_runtime(name: str, default: str) -> str:
     raw = os.getenv(name, "").strip().lower()
     if not raw:
         return default
-    if raw in {"langchain", "langgraph"}:
+    if raw == "langgraph":
         return raw
     logger.warning("Invalid runtime env %s=%r, fallback to default=%s", name, raw, default)
     return default

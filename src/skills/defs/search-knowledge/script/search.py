@@ -20,6 +20,7 @@ def search_knowledge(query: str) -> str:
             "answer": getattr(result, "answer", ""),
             "sources": getattr(result, "sources", []),
             "debug": getattr(result, "debug", {}),
+            "insufficient_info": getattr(result, "insufficient_info", False),
         },
         ensure_ascii=False,
     )

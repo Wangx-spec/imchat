@@ -13,6 +13,16 @@ from rag.core.bootstrap import bootstrap_rag
 
 logger = logging.getLogger("chat.cli")
 
+_INTERNAL_STREAM_NODES = {
+    "supervisor",
+    "image_input_guardrail",
+    "image_caption",
+    "input_guardrail",
+    "triage",
+    "decompose",
+    "worker",
+}
+_FINAL_STREAM_NODES = {"single", "image", "synthesize", "output_guardrail"}
 
 def _extract_text_from_content(content) -> str:
     if isinstance(content, str):
@@ -69,7 +79,7 @@ def _log_tool_calls(tool_calls: list[dict]) -> None:
         logger.info("[TOOL_SKIP] no tool call in this turn")
 
 
-def _stream_langgraph(dialog_runner, session_id: str, message: str) -> tuple[str, list[dict]]:
+def _stream_langgraph(dialog_runner, runtime: str, session_id: str, message: str) -> tuple[str, list[dict]]:
     latest_answer = ""
     seen_answer = ""
     collected_tool_calls: list[dict] = []
@@ -81,14 +91,18 @@ def _stream_langgraph(dialog_runner, session_id: str, message: str) -> tuple[str
     ):
         if not isinstance(update, dict):
             continue
-        for node_state in update.values():
+        for node_name, node_state in update.items():
+            if node_name in _INTERNAL_STREAM_NODES:
+                continue
+            if runtime == "langgraph-swarm" and node_name not in _FINAL_STREAM_NODES:
+                continue
             if not isinstance(node_state, dict):
                 continue
             messages = node_state.get("messages", [])
-            for message in messages:
-                collected_tool_calls.extend(_extract_tool_calls_from_message(message))
-                if getattr(message, "type", "") == "ai":
-                    text = _extract_text_from_content(getattr(message, "content", "")).strip()
+            for msg in messages:
+                collected_tool_calls.extend(_extract_tool_calls_from_message(msg))
+                if getattr(msg, "type", "") == "ai":
+                    text = _extract_text_from_content(getattr(msg, "content", "")).strip()
                     if text:
                         latest_answer = text
                         if text != seen_answer:
@@ -146,8 +160,8 @@ def run_chat() -> None:
             save_message(session_id, "user", user_input)
             answer = ""
             tool_calls: list[dict] = []
-            if runtime == "langgraph" and settings.agent_streaming:
-                answer, tool_calls = _stream_langgraph(dialog_runner, session_id, user_input)
+            if runtime.startswith("langgraph") and settings.agent_streaming:
+                answer, tool_calls = _stream_langgraph(dialog_runner, runtime, session_id, user_input)
                 if not answer:
                     result = dialog_runner.invoke(
                         {"messages": [("user", user_input)]},
@@ -174,7 +188,7 @@ def run_chat() -> None:
 
             _log_tool_calls(tool_calls)
             logger.info("[CHAT_RESULT] answer=%s", answer)
-            if runtime != "langgraph" or not settings.agent_streaming:
+            if not (runtime.startswith("langgraph") and settings.agent_streaming):
                 print(f"Assistant: {answer}")
         except Exception as exc:
             logger.exception("[CHAT_ERROR] %s", exc)

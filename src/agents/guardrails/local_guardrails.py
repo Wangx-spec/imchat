@@ -3,14 +3,19 @@ import logging
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 
+from agents.guardrails import constraints
+
 
 logger = logging.getLogger(__name__)
 
 
 class LocalGuardrails:
     """基于 LLM 的本地 guardrails，用于输入拦截与输出复核。"""
-    def __init__(self, llm):
+    def __init__(self, llm, settings=None):
         self.llm = llm
+        self.settings = settings
+        self.harness_enabled = bool(getattr(settings, "harness_enabled", False))
+        self.harness_max_repair = int(getattr(settings, "harness_max_repair", 1) or 0)
         self.input_check_prompt = PromptTemplate.from_template(
     """你是一个医疗 AI 助手的输入安全过滤器。请判断下面的用户输入是否允许进入系统。
 用户输入：
@@ -92,9 +97,6 @@ AI 回复：
             }
         ).strip()
 
-        if result.upper() == "PASS":
-            return output_text
-
         if result.upper().startswith("FAIL"):
             reason = result.split(":", 1)[1].strip() if ":" in result else "output_not_safe"
             logger.info("[OUTPUT_GUARDRAIL] fail reason=%s", reason)
@@ -105,7 +107,48 @@ AI 回复：
                     "reason": reason,
                 }
             ).strip()
-            return fixed or output_text
+            output_text = fixed or output_text
+        elif result.upper() != "PASS":
+            logger.warning("[OUTPUT_GUARDRAIL] unexpected_review_result=%r", result)
 
-        logger.warning("[OUTPUT_GUARDRAIL] unexpected_review_result=%r", result)
+        if self.harness_enabled:
+            output_text = self._run_harness(output_text, user_input)
+
         return output_text
+
+    def _run_harness(self, output_text: str, user_input: str) -> str:
+        """确定性约束 + 有界自动修复，复用 output_fix_chain。"""
+        text = (output_text or "").strip()
+        violations = constraints.evaluate(text)
+        attempts = 0
+        while violations and attempts < self.harness_max_repair:
+            attempts += 1
+            reason = "Harness约束修复：" + constraints.format_reason(violations)
+            logger.info("[HARNESS] repair attempt=%d reason=%s", attempts, reason)
+            fixed = self.output_fix_chain.invoke(
+                {
+                    "output": text,
+                    "user_input": user_input,
+                    "reason": reason,
+                }
+            ).strip()
+            if fixed:
+                text = fixed
+            violations = constraints.evaluate(text)
+
+        if violations:
+            logger.warning(
+                "[HARNESS] residual violations after %d attempts: %s",
+                attempts,
+                constraints.format_reason(violations),
+            )
+            return self._harness_fallback()
+        return text
+
+    @staticmethod
+    def _harness_fallback() -> str:
+        return (
+            "抱歉，本次回答未通过安全合规校验，已做拦截。\n"
+            "以上内容仅能提供非诊断性的一般健康信息，不能替代专业医生的面诊与诊疗，"
+            "如有不适请及时就医并咨询专业医生。"
+        )

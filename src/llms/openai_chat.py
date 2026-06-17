@@ -3,9 +3,10 @@ from config.settings import Settings
 from agents.agent_registry import LLMSpec
 
 def build_openai_chat_model(settings: Settings) -> ChatOpenAI:
-    return build_openai_chat_model_with_override(settings, None)
-    
-def build_openai_chat_model_with_override(
+    return build_chat_model(settings, None)
+
+
+def build_chat_model(
     settings: Settings,
     override: LLMSpec | None,
 ) -> ChatOpenAI:

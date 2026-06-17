@@ -15,6 +15,10 @@ class RAGConfig:
     embedding_base_url: str = "https://dashscope.aliyuncs.com/compatible-mode/v1"
     embedding_model: str = "text-embedding-v4"
     embedding_dimensions: int = 1024
+    vector_db_provider: str = "faiss"
+    qdrant_url: str | None = None
+    qdrant_api_key: str | None = None
+    qdrant_collection: str = "rag_documents"
     chunk_size: int = 800
     rrf_k: int = 60
     rebuild: bool = False
@@ -50,3 +54,4 @@ class AnswerResult:
     answer: str
     sources: list[str] = field(default_factory=list)
     debug: dict[str, Any] = field(default_factory=dict)
+    insufficient_info: bool = False
