@@ -49,7 +49,7 @@ cook-proj/
 │  └─ web/
 │     ├─ app.py              # FastAPI app 初始化
 │     └─ static/             # Vue 构建产物
-├─ source_dir/file_data/     # 当前 RAG Markdown 语料目录
+├─ source_dir/medical_md/    # 当前医学 RAG Markdown 语料目录
 ├─ data/                     # RAG index、上传图片等运行数据
 ├─ docs/                     # 历史方案与融合方案
 ├─ .env.example              # 脱敏配置模板
@@ -90,17 +90,21 @@ cp .env.example .env
 至少需要配置：
 
 ```env
-OPENAI_API_KEY=your_openai_or_dashscope_key
-OPENAI_MODEL=qwen-plus
-OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+TEXT_MODEL_PROVIDER=glm_sync
+GLM_API_KEY=your_bigmodel_token
+GLM_MODEL=glm-4-flashx-250414
+GLM_ROUTER_MODEL=glm-4-flashx-250414
+GLM_BASE_URL=https://open.bigmodel.cn/api/paas/v4
 
 RAG_ENABLED=true
-RAG_SOURCE_DIRS=source_dir/file_data
+RAG_SOURCE_DIRS=source_dir/medical_md
 RAG_INDEX_DIR=data/medical_rag_index
 RAG_EMBEDDING_API_KEY=your_embedding_key
 ```
 
 `.env` 已加入 `.gitignore`，不要提交真实密钥。`.env.example` 可以提交。
+
+交互式聊天推荐使用 `TEXT_MODEL_PROVIDER=glm_sync`，它直接请求 GLM 同步接口，避免异步接口每秒轮询 `/async-result/{id}`。`glm_async` 仍保留给长任务或离线批处理。
 
 ## 启动方式
 

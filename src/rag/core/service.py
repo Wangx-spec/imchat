@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 class RAGService:
 
-    def __init__(self, cfg: RAGConfig, llm: Any | None = None) -> None:
+    def __init__(self, cfg: RAGConfig, llm: Any | None = None, query_planner_llm: Any | None = None) -> None:
         # 配置先做一次sanitize，避免后续参数异常
         self.cfg = sanitize_rag_config(cfg)
         self.ready = False
@@ -27,6 +27,7 @@ class RAGService:
         self.chunker = ParentChildChunker(self.cfg.chunk_size, self.cfg.chunk_overlap)
         self.index_store = build_index_store(self.cfg)
         self.router = GenerationRouter(llm=llm)
+        self.query_planner_llm = query_planner_llm or llm
         self.query_planner: LLMQueryPlanner | None = None
 
         self.retriever: HybridRetriever | None = None
@@ -59,7 +60,16 @@ class RAGService:
         if not self.children:
             raise RuntimeError("No child chunks generated")
 
-        if self.cfg.rag_query_plan_api_key:
+        if self.query_planner_llm is not None:
+            try:
+                self.query_planner = LLMQueryPlanner(
+                    llm=self.query_planner_llm,
+                    max_variants=self.cfg.rag_query_plan_max_variants,
+                )
+            except Exception as exc:
+                self.query_planner = None
+                logger.warning("Query planner init failed, fallback to rule query expansion: %s", exc)
+        elif self.cfg.rag_query_plan_api_key:
             try:
                 self.query_planner = LLMQueryPlanner(
                     api_key=self.cfg.rag_query_plan_api_key,

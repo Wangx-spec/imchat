@@ -27,20 +27,26 @@ class QueryPlan:
 class LLMQueryPlanner:
     def __init__(
         self,
-        api_key: str,
-        base_url: str,
+        api_key: str | None = None,
+        base_url: str | None = None,
         model: str = "qwen2.5-coder-7b-instruct",
         timeout_ms: int = 2000,
         max_variants: int = 5,
+        llm: Any | None = None,
     ) -> None:
         self.max_variants = max_variants
-        self.llm = ChatOpenAI(
-            api_key=api_key,
-            base_url=base_url,
-            model=model,
-            temperature=0,
-            timeout=max(1.0, timeout_ms / 1000.0),
-        )
+        if llm is not None:
+            self.llm = llm
+        else:
+            if not api_key or not base_url:
+                raise ValueError("api_key and base_url are required when llm is not provided")
+            self.llm = ChatOpenAI(
+                api_key=api_key,
+                base_url=base_url,
+                model=model,
+                temperature=0,
+                timeout=max(1.0, timeout_ms / 1000.0),
+            )
 
     def _extract_json(self, text: str) -> dict[str, Any]:
         t = (text or "").strip()

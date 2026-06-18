@@ -1,4 +1,5 @@
 import re
+import time
 from threading import Lock
 from config.logging_setup import setup_logging
 from typing import Any, Generator
@@ -82,11 +83,25 @@ def _stream_langgraph_updates(
     collected_tool_calls: list[dict] = []
     stream_deferred = _runtime in {"langgraph-multi", "langgraph-swarm"}
 
+    timeout_s = float(getattr(_settings, "agent_timeout_s", 60.0) or 60.0)
+    start = time.monotonic()
+    timed_out = False
+
     for update in _agent.stream(
         inputs,
         config={"configurable": {"thread_id": session_id}},
         stream_mode="updates",
     ):
+        if time.monotonic() - start > timeout_s:
+            timed_out = True
+            logger.warning(
+                "[CHAT_STREAM_TIMEOUT] session=%s elapsed=%.1fs limit=%.1fs",
+                session_id,
+                time.monotonic() - start,
+                timeout_s,
+            )
+            break
+
         if not isinstance(update, dict):
             continue
 
@@ -127,8 +142,16 @@ def _stream_langgraph_updates(
                     event, sent_answer = _chunk_event_for_text(text, sent_answer)
                     yield event
 
-    if stream_deferred and latest_answer and latest_answer != sent_answer:
-        yield sse_event("chunk", {"text": latest_answer})
+    if timed_out and not latest_answer:
+        latest_answer = (
+            "处理时间较长，已根据现有信息为你总结：暂未形成完整结论，"
+            "建议补充更具体的症状/病史信息，或稍后重试。如症状紧急，请及时就医。"
+        )
+
+    if latest_answer and latest_answer != sent_answer:
+        if stream_deferred or timed_out:
+            event, sent_answer = _chunk_event_for_text(latest_answer, sent_answer)
+            yield event
 
     return latest_answer, collected_tool_calls, False
 
@@ -304,6 +327,10 @@ def _current_turn_messages(messages: list[Any], current_user_message: str) -> li
 
     if fallback_idx is not None:
         return messages[fallback_idx + 1 :]
+    # LangGraph updates mode may emit only the node delta. Final swarm nodes
+    # often return just [AIMessage(...)] instead of the full conversation state.
+    if any(getattr(msg, "type", "") == "ai" for msg in messages):
+        return messages
     return []
 
 def extract_text_from_result(result: dict) -> str:

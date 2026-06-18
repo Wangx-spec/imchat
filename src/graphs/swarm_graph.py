@@ -5,6 +5,7 @@ import logging
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import Send, interrupt
+from langgraph.errors import GraphRecursionError
 
 
 
@@ -22,7 +23,7 @@ from graphs.lead_agent import build_decompose_node, build_synthesize_node
 from memory.mem0_client import build_mem0_client
 from graphs.triage import build_triage_node
 from graphs.swarm_state import SwarmState
-from llms.openai_chat import build_openai_chat_model
+from llms.openai_chat import build_openai_chat_model, build_router_chat_model
 from llms.qwen_vl import build_qwen_vl_client
 
 logger = logging.getLogger(__name__)
@@ -68,22 +69,51 @@ def build_hitl_node(settings):
 
 def build_swarm_graph(settings, checkpointer=None):
     llm = build_openai_chat_model(settings)
+    router_llm = build_router_chat_model(settings)
     vlm = build_qwen_vl_client(settings)
     agents = build_domain_agents(settings)
     mem0_client = build_mem0_client(settings)
+
+    max_iters = max(1, int(getattr(settings, "agent_max_iterations", 5)))
+    agent_config = {"recursion_limit": 2 * max_iters + 1}
 
     def worker_node(state) -> dict:
         # state 里带单个 subtask（通过 Send 注入）
         task = state["__task__"]
         agent = agents[task["agent"]]
-        result = agent.invoke({"messages": [HumanMessage(content=task["query"])]})
-        answer = result["messages"][-1].content
+        try:
+            result = agent.invoke(
+                {"messages": [HumanMessage(content=task["query"])]},
+                config=agent_config,
+            )
+            answer = result["messages"][-1].content
+        except GraphRecursionError:
+            logger.warning(
+                "[WORKER_RECURSION_LIMIT] agent=%s reached max_iterations=%d",
+                task["agent"],
+                max_iters,
+            )
+            answer = "（该专家分析步骤已达上限，以下为阶段性结论：暂未形成完整结论，建议补充更具体信息。）"
         return {"contributions": [{"agent": task["agent"], "answer": answer}]}
     
     def single_node(state) -> dict:
         agent = agents[state.get("target_agent") or "consultation"]
-        result = agent.invoke({"messages": state["messages"]})
-        return {"messages": result["messages"]}
+        try:
+            result = agent.invoke({"messages": state["messages"]}, config=agent_config)
+            return {"messages": result["messages"]}
+        except GraphRecursionError:
+            logger.warning(
+                "[SINGLE_RECURSION_LIMIT] agent=%s reached max_iterations=%d",
+                state.get("target_agent") or "consultation",
+                max_iters,
+            )
+            return {
+                "messages": [
+                    AIMessage(
+                        content="分析步骤已达上限，以下为阶段性结论：暂未形成完整结论，建议补充更具体的症状或病史信息后重试。如症状紧急，请及时就医。"
+                    )
+                ]
+            }
     
     def image_node(state) -> dict:
 
@@ -168,8 +198,8 @@ def build_swarm_graph(settings, checkpointer=None):
 
     builder.add_node("image_input_guardrail", build_image_input_guardrail_node(settings))
     builder.add_node("image_caption", build_image_caption_node(vlm))
-    builder.add_node("triage", build_triage_node(llm, settings))
-    builder.add_node("decompose", build_decompose_node(llm, settings))
+    builder.add_node("triage", build_triage_node(router_llm, settings))
+    builder.add_node("decompose", build_decompose_node(router_llm, settings))
     builder.add_node("worker", worker_node)
     builder.add_node("synthesize", build_synthesize_node(llm))
 
@@ -184,7 +214,7 @@ def build_swarm_graph(settings, checkpointer=None):
     
     
     if guardrails_on:
-        g = LocalGuardrails(llm, settings)
+        g = LocalGuardrails(router_llm, settings)
         builder.add_node("input_guardrail", build_input_guardrail_node(g))
         builder.add_node("output_guardrail", build_output_guardrail_node(g))
     

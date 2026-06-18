@@ -14,10 +14,24 @@ class Settings:
     openai_api_key: str
     openai_model: str = "gpt-4o-mini"
     openai_base_url: str | None = None
+    text_model_provider: str = "glm_sync"
+    glm_api_key: str | None = None
+    glm_model: str = "glm-4-flashx-250414"
+    glm_router_model: str | None = None
+    glm_base_url: str = "https://open.bigmodel.cn/api/paas/v4"
+    glm_async_submit_path: str = "/async/chat/completions"
+    glm_async_result_path: str = "/async-result/{id}"
+    glm_poll_interval_s: float = 1.0
+    glm_max_poll_s: float = 120.0
+    glm_temperature: float = 1.0
     verbose: bool = False
     agent_runtime: str = "langgraph"
     agent_streaming: bool = True
     agent_use_langgraph_memory: bool = True
+    agent_timeout_s: float = 90.0
+    agent_request_timeout_s: float = 60.0
+    agent_max_iterations: int = 3
+    router_model: str = "qwen-max"
     hitl_action: str = "interrupt"  # "interrupt" | "warn" | "off"
     hitl_resume_default: str = "approve"
     elevenlabs_enabled: bool = False
@@ -93,9 +107,9 @@ class Settings:
     mem0_user_scope: str = "session"  # "session" | "global"
 
     agent_mode: str = "single"  # "single" | "multi" | "swarm"
-    swarm_max_workers: int = 3
+    swarm_max_workers: int = 2
     swarm_timeout_s: float = 90.0
-    complexity_threshold: float = 0.6
+    complexity_threshold: float = 0.85
     
     # 网络搜索
     tavily_api_key: str | None = None
@@ -105,16 +119,38 @@ class Settings:
 def load_settings() -> Settings:
     load_dotenv()
 
+    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
+    base_url = os.getenv("OPENAI_BASE_URL", "").strip() or None
+    text_model_provider = os.getenv("TEXT_MODEL_PROVIDER", "glm_sync").strip().lower() or "glm_sync"
+    if text_model_provider not in {"openai_compatible", "glm_async", "glm_sync"}:
+        logger.warning("Invalid TEXT_MODEL_PROVIDER=%r, fallback to glm_sync", text_model_provider)
+        text_model_provider = "glm_sync"
+    glm_api_key = os.getenv("GLM_API_KEY", "").strip() or None
     api_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not api_key:
+    if text_model_provider in {"glm_async", "glm_sync"}:
+        if not glm_api_key:
+            raise ValueError(
+                "Missing GLM_API_KEY. Please create a .env file based on .env.example."
+            )
+        api_key = api_key or glm_api_key
+    elif not api_key:
         raise ValueError(
             "Missing OPENAI_API_KEY. Please create a .env file based on .env.example."
         )
-
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini").strip() or "gpt-4o-mini"
-    base_url = os.getenv("OPENAI_BASE_URL", "").strip() or None
+    glm_model = os.getenv("GLM_MODEL", "glm-4-flashx-250414").strip() or "glm-4-flashx-250414"
+    glm_router_model = os.getenv("GLM_ROUTER_MODEL", "").strip() or None
+    glm_base_url = os.getenv("GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4").strip() or "https://open.bigmodel.cn/api/paas/v4"
+    glm_async_submit_path = os.getenv("GLM_ASYNC_SUBMIT_PATH", "/async/chat/completions").strip() or "/async/chat/completions"
+    glm_async_result_path = os.getenv("GLM_ASYNC_RESULT_PATH", "/async-result/{id}").strip() or "/async-result/{id}"
+    glm_poll_interval_s = _parse_float("GLM_POLL_INTERVAL_S", 1.0, 0.1, 10.0)
+    glm_max_poll_s = _parse_float("GLM_MAX_POLL_S", 120.0, 1.0, 600.0)
+    glm_temperature = _parse_float("GLM_TEMPERATURE", 1.0, 0.0, 2.0)
     verbose = os.getenv("AGENT_VERBOSE", "false").lower() in {"1", "true", "yes"}
     agent_use_langgraph_memory = _parse_bool("AGENT_USE_LANGGRAPH_MEMORY", True)
+    agent_timeout_s = _parse_float("AGENT_TIMEOUT_S", 90.0, 5.0, 600.0)
+    agent_request_timeout_s = _parse_float("AGENT_REQUEST_TIMEOUT_S", 60.0, 5.0, 300.0)
+    agent_max_iterations = _parse_int("AGENT_MAX_ITERATIONS", 3, 1)
+    router_model = os.getenv("ROUTER_MODEL", "qwen-max").strip() or "qwen-max"
     elevenlabs_enabled = _parse_bool("ELEVENLABS_ENABLED", False)
     elevenlabs_api_key = os.getenv("ELEVENLABS_API_KEY", "").strip() or None
     elevenlabs_voice_id = os.getenv("ELEVENLABS_VOICE_ID", "Rachel").strip() or "Rachel"
@@ -233,18 +269,32 @@ def load_settings() -> Settings:
     tavily_api_key = os.getenv("TAVILY_API_KEY", "").strip() or None
     tavily_enabled = _parse_bool("TAVILY_ENABLED", False)
 
-    swarm_max_workers = _parse_int("SWARM_MAX_WORKERS", 3, 1)
+    swarm_max_workers = _parse_int("SWARM_MAX_WORKERS", 2, 1)
     swarm_timeout_s = _parse_float("SWARM_TIMEOUT_S", 90.0, 1.0, 600.0)
-    complexity_threshold = _parse_float("COMPLEXITY_THRESHOLD", 0.6, 0.0, 1.0)
+    complexity_threshold = _parse_float("COMPLEXITY_THRESHOLD", 0.85, 0.0, 1.0)
 
     return Settings(
         openai_api_key=api_key,
         openai_model=model,
         openai_base_url=base_url,
+        text_model_provider=text_model_provider,
+        glm_api_key=glm_api_key,
+        glm_model=glm_model,
+        glm_router_model=glm_router_model,
+        glm_base_url=glm_base_url,
+        glm_async_submit_path=glm_async_submit_path,
+        glm_async_result_path=glm_async_result_path,
+        glm_poll_interval_s=glm_poll_interval_s,
+        glm_max_poll_s=glm_max_poll_s,
+        glm_temperature=glm_temperature,
         verbose=verbose,
         agent_runtime=_parse_runtime("AGENT_RUNTIME", "langgraph"),
         agent_streaming=_parse_bool("AGENT_STREAMING", True),
         agent_use_langgraph_memory=agent_use_langgraph_memory,
+        agent_timeout_s=agent_timeout_s,
+        agent_request_timeout_s=agent_request_timeout_s,
+        agent_max_iterations=agent_max_iterations,
+        router_model=router_model,
         elevenlabs_enabled=elevenlabs_enabled,
         elevenlabs_api_key=elevenlabs_api_key,
         elevenlabs_voice_id=elevenlabs_voice_id,
