@@ -67,3 +67,17 @@ def update_title(session_id: str, title: str) -> None:
                 (title, session_id),
             )
             conn.commit()
+
+
+def delete_conversation(session_id: str) -> bool:
+    """Delete a conversation and cascade-delete its messages."""
+    pool = get_postgres_pool()
+    with pool.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM conversations WHERE session_id = %s AND user_id = %s",
+                (session_id, DEFAULT_USER),
+            )
+            deleted = cur.rowcount > 0
+            conn.commit()
+    return deleted

@@ -23,6 +23,7 @@ _INTERNAL_STREAM_NODES = {
 }
 
 _FINAL_STREAM_NODES = {
+    "evidence_answer",
     "single",
     "image",
     "synthesize",
@@ -118,6 +119,11 @@ def _stream_langgraph_updates(
             if not isinstance(node_state, dict):
                 continue
 
+            _extend_tool_calls_unique(
+                collected_tool_calls,
+                _evidence_grounding_calls(node_state),
+            )
+
             turn_messages = _current_turn_messages(
                 node_state.get("messages", []),
                 current_user_message,
@@ -158,7 +164,9 @@ def _stream_langgraph_updates(
 
 def _invoke_agent_with_inputs(session_id: str, inputs: dict) -> tuple[str, list[dict]]:
     result = _agent.invoke(inputs, config={"configurable": {"thread_id": session_id}})
-    return extract_text_from_result(result), extract_tool_calls(result)
+    tool_calls = extract_tool_calls(result)
+    _extend_tool_calls_unique(tool_calls, _evidence_grounding_calls(result))
+    return extract_text_from_result(result), tool_calls
 
 def _attachment_to_data_url(path: str) -> str:
     mime, _ = mimetypes.guess_type(path)
@@ -309,6 +317,19 @@ def _extend_tool_calls_unique(bucket: list[dict], new_calls: list[dict]) -> None
         bucket.append(c)
 
 
+def _evidence_grounding_calls(state: dict) -> list[dict]:
+    if not state.get("evidence_answered"):
+        return []
+    if str(state.get("evidence_source") or "").strip() != "knowledge_base":
+        return []
+    return [
+        {
+            "name": "search_knowledge_base",
+            "args": {"source": "evidence_answer"},
+        }
+    ]
+
+
 def _current_turn_messages(messages: list[Any], current_user_message: str) -> list[Any]:
     if not isinstance(messages, list) or not messages:
         return []
@@ -398,6 +419,7 @@ def _invoke_agent(session_id: str, message: str) -> tuple[str, list[dict]]:
     )
     answer = _sanitize_echo_answer(extract_text_from_result(result), message)
     tool_calls = extract_tool_calls(result)
+    _extend_tool_calls_unique(tool_calls, _evidence_grounding_calls(result))
     return answer, tool_calls
 
 def invoke(session_id: str, message: str) -> tuple[str, list[dict]]:

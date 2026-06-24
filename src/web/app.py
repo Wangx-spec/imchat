@@ -19,6 +19,7 @@ from db.connection import init_postgres_pool
 
 from rag.core.bootstrap import bootstrap_rag
 from controllers.chat_controller import router as chat_router
+from controllers.knowledge_controller import router as knowledge_router
 from controllers.system_controller import router as system_router, init as system_init
 from fastapi import FastAPI
 
@@ -34,6 +35,7 @@ chat_service_init(_agent, _settings, _runtime)
 
 app = FastAPI(title="Chat UI")
 app.include_router(chat_router)
+app.include_router(knowledge_router)
 app.include_router(system_router)
 
 # 挂载多模态静态资源目录（供“参考图片”和用户上传图片访问）

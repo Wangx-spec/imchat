@@ -1,12 +1,7 @@
-from rag.ingestion.chunking import ParentChildChunker
-from rag.ingestion.data_loader import MarkdownDataLoader
-from rag.ingestion.pdf_parser import ParsedPdfDoc, parse_pdf
-from rag.ingestion.pdf_to_markdown import render_markdown
+"""RAG ingestion package.
 
-__all__ = [
-    "ParentChildChunker",
-    "MarkdownDataLoader",
-    "ParsedPdfDoc",
-    "parse_pdf",
-    "render_markdown",
-]
+Import concrete ingestion modules directly to avoid loading optional dependencies
+such as marker-pdf or langchain during lightweight PDF parsing.
+"""
+
+__all__: list[str] = []

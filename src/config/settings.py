@@ -93,6 +93,15 @@ class Settings:
     rag_rerank_backend: str = "qwen"  # "qwen" | "crossencoder" | "none"
     rag_rerank_local_model: str = "BAAI/bge-reranker-v2-m3"
     rag_rerank_device: str = "cpu"    # "cpu" | "cuda" | "mps"
+    # RAG 性能融合：并行召回 / 缓存 / 熔断
+    rag_parallel_recall: bool = True
+    rag_parallel_max_workers: int = 8
+    rag_cache_enabled: bool = True
+    rag_cache_ttl_s: float = 300.0
+    rag_cache_max_size: int = 512
+    rag_breaker_enabled: bool = True
+    rag_breaker_fail_threshold: int = 3
+    rag_breaker_recovery_s: float = 30.0
     postgres_uri: str | None = None
     enabled_skills: list[str] | None = None    # 新增
     guardrails_enabled: bool = True
@@ -102,6 +111,15 @@ class Settings:
     triage_confidence_threshold: float = 0.75
     image_analysis_enabled: bool = False
     hitl_enabled: bool = False
+    memory_backend: str = "off"  # "off" | "vector"
+    vector_memory_enabled: bool = True
+    vector_memory_provider: str = "qdrant"
+    vector_memory_user_id: str = "default-user"
+    vector_memory_episodic_collection: str = "memory_episodic"
+    vector_memory_profile_collection: str = "memory_profile"
+    vector_memory_top_k: int = 5
+    vector_memory_profile_update_every: int = 3
+    # Deprecated: mem0 is no longer used by the graph memory layer.
     mem0_enabled: bool = False
     mem0_api_key: str | None = None
     mem0_user_scope: str = "session"  # "session" | "global"
@@ -243,6 +261,26 @@ def load_settings() -> Settings:
     triage_confidence_threshold = _parse_float("TRIAGE_CONFIDENCE_THRESHOLD", 0.75, 0.0, 1.0)
     image_analysis_enabled = _parse_bool("IMAGE_ANALYSIS_ENABLED", multimodal_enabled)
     hitl_enabled = _parse_bool("HITL_ENABLED", False)
+    memory_backend = os.getenv("MEMORY_BACKEND", "off").strip().lower() or "off"
+    if memory_backend not in {"off", "vector"}:
+        logger.warning("Invalid MEMORY_BACKEND=%r, fallback to off", memory_backend)
+        memory_backend = "off"
+    vector_memory_enabled = _parse_bool("VECTOR_MEMORY_ENABLED", True)
+    vector_memory_provider = os.getenv("VECTOR_MEMORY_PROVIDER", "qdrant").strip().lower() or "qdrant"
+    if vector_memory_provider != "qdrant":
+        logger.warning("Invalid VECTOR_MEMORY_PROVIDER=%r, fallback to qdrant", vector_memory_provider)
+        vector_memory_provider = "qdrant"
+    vector_memory_user_id = os.getenv("VECTOR_MEMORY_USER_ID", "default-user").strip() or "default-user"
+    vector_memory_episodic_collection = (
+        os.getenv("VECTOR_MEMORY_EPISODIC_COLLECTION", "memory_episodic").strip()
+        or "memory_episodic"
+    )
+    vector_memory_profile_collection = (
+        os.getenv("VECTOR_MEMORY_PROFILE_COLLECTION", "memory_profile").strip()
+        or "memory_profile"
+    )
+    vector_memory_top_k = _parse_int("VECTOR_MEMORY_TOP_K", 5, 1)
+    vector_memory_profile_update_every = _parse_int("VECTOR_MEMORY_PROFILE_UPDATE_EVERY", 3, 1)
     mem0_enabled = _parse_bool("MEM0_ENABLED", False)
     mem0_api_key = os.getenv("MEM0_API_KEY", "").strip() or None
     mem0_user_scope = os.getenv("MEM0_USER_SCOPE", "session").strip().lower() or "session"
@@ -265,6 +303,15 @@ def load_settings() -> Settings:
         rag_rerank_backend = "qwen"
     rag_rerank_local_model = os.getenv("RAG_RERANK_LOCAL_MODEL", "BAAI/bge-reranker-v2-m3").strip() or "BAAI/bge-reranker-v2-m3"
     rag_rerank_device = os.getenv("RAG_RERANK_DEVICE", "cpu").strip().lower() or "cpu"
+
+    rag_parallel_recall = _parse_bool("RAG_PARALLEL_RECALL", True)
+    rag_parallel_max_workers = _parse_int("RAG_PARALLEL_MAX_WORKERS", 8, 1)
+    rag_cache_enabled = _parse_bool("RAG_CACHE_ENABLED", True)
+    rag_cache_ttl_s = _parse_float("RAG_CACHE_TTL_S", 300.0, 0.0, 86400.0)
+    rag_cache_max_size = _parse_int("RAG_CACHE_MAX_SIZE", 512, 1)
+    rag_breaker_enabled = _parse_bool("RAG_BREAKER_ENABLED", True)
+    rag_breaker_fail_threshold = _parse_int("RAG_BREAKER_FAIL_THRESHOLD", 3, 1)
+    rag_breaker_recovery_s = _parse_float("RAG_BREAKER_RECOVERY_S", 30.0, 0.0, 3600.0)
 
     tavily_api_key = os.getenv("TAVILY_API_KEY", "").strip() or None
     tavily_enabled = _parse_bool("TAVILY_ENABLED", False)
@@ -358,6 +405,14 @@ def load_settings() -> Settings:
         triage_confidence_threshold=triage_confidence_threshold,
         image_analysis_enabled=image_analysis_enabled,
         hitl_enabled=hitl_enabled,
+        memory_backend=memory_backend,
+        vector_memory_enabled=vector_memory_enabled,
+        vector_memory_provider=vector_memory_provider,
+        vector_memory_user_id=vector_memory_user_id,
+        vector_memory_episodic_collection=vector_memory_episodic_collection,
+        vector_memory_profile_collection=vector_memory_profile_collection,
+        vector_memory_top_k=vector_memory_top_k,
+        vector_memory_profile_update_every=vector_memory_profile_update_every,
         mem0_enabled=mem0_enabled,
         mem0_api_key=mem0_api_key,
         mem0_user_scope=mem0_user_scope,
@@ -367,6 +422,15 @@ def load_settings() -> Settings:
         rag_rerank_backend=rag_rerank_backend,
         rag_rerank_local_model=rag_rerank_local_model,
         rag_rerank_device=rag_rerank_device,
+
+        rag_parallel_recall=rag_parallel_recall,
+        rag_parallel_max_workers=rag_parallel_max_workers,
+        rag_cache_enabled=rag_cache_enabled,
+        rag_cache_ttl_s=rag_cache_ttl_s,
+        rag_cache_max_size=rag_cache_max_size,
+        rag_breaker_enabled=rag_breaker_enabled,
+        rag_breaker_fail_threshold=rag_breaker_fail_threshold,
+        rag_breaker_recovery_s=rag_breaker_recovery_s,
 
         tavily_api_key=tavily_api_key,
         tavily_enabled=tavily_enabled,

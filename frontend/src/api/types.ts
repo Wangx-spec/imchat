@@ -60,3 +60,63 @@ export type ChatMessage = {
     interrupt?: HitlInterrupt;
   };
 };
+
+export type KnowledgeStats = {
+  enabled?: boolean;
+  ready?: boolean;
+  reason?: string;
+  source_dirs?: string[];
+  index_dir?: string;
+  vector_db_provider?: string;
+  parent_count?: number;
+  child_count?: number;
+  retriever_ready?: boolean;
+  index_loaded?: boolean;
+  index_rebuilt?: boolean;
+  index_meta_match?: boolean | null;
+  index_meta_reason?: string | null;
+  rerank_enabled?: boolean;
+  parallel_recall?: boolean;
+  cache_enabled?: boolean;
+};
+
+export type KnowledgeSourceFile = {
+  path: string;
+  name: string;
+  size: number;
+  modified_at?: number | null;
+  exists: boolean;
+  source_dir: string;
+};
+
+export type KnowledgeParent = {
+  title: string;
+  source: string;
+  content: string;
+  metadata: Record<string, unknown>;
+};
+
+export type KnowledgeSearchResponse = {
+  ok: boolean;
+  query: string;
+  answer: string;
+  sources: string[];
+  parents: KnowledgeParent[];
+  debug: Record<string, unknown>;
+  insufficient_info: boolean;
+  elapsed_ms: number;
+};
+
+export type KnowledgeUploadResponse = {
+  ok: boolean;
+  saved_files: string[];
+  rebuild?: KnowledgeRebuildResponse | null;
+};
+
+export type KnowledgeRebuildResponse = {
+  ok: boolean;
+  parent_count: number;
+  child_count: number;
+  index_rebuilt: boolean;
+  elapsed_ms: number;
+};

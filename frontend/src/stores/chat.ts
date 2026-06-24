@@ -2,6 +2,7 @@ import { defineStore } from "pinia";
 
 import {
   createConversation,
+  deleteConversation as deleteConversationApi,
   listConversations,
   listMessages,
   resumeHitl,
@@ -91,6 +92,21 @@ export const useChatStore = defineStore("chat", {
         });
       }
       await this.refreshConversations();
+    },
+
+    async deleteConversation(sessionId: string) {
+      if (!sessionId || this.isStreaming) return;
+      const wasActive = sessionId === this.sessionId;
+      await deleteConversationApi(sessionId);
+      await this.refreshConversations();
+      if (!wasActive) return;
+
+      const next = this.conversations[0];
+      if (next) {
+        await this.switchSession(next.session_id);
+      } else {
+        await this.startNewConversation();
+      }
     },
 
     addImages(files: File[], maxImages = 3) {

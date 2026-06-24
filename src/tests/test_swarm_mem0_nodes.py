@@ -26,15 +26,15 @@ class FakeMem0:
     def recall(self, user_id: str, query: str, limit: int = 5):
         return ["prefers concise answer"]
 
-    def remember(self, user_id: str, messages: list[dict]):
-        self.remember_calls.append((user_id, messages))
+    def remember(self, user_id: str, messages: list[dict], session_id: str | None = None):
+        self.remember_calls.append((user_id, messages, session_id))
 
 
-def test_swarm_graph_mem0_recall_and_persist(monkeypatch):
+def test_swarm_graph_memory_recall_and_persist(monkeypatch):
     import graphs.swarm_graph as swarm_graph
 
     agent = CapturingAgent()
-    fake_mem0 = FakeMem0()
+    fake_memory = FakeMem0()
 
     monkeypatch.setattr(swarm_graph, "build_openai_chat_model", lambda settings: FakeLLM())
     monkeypatch.setattr(swarm_graph, "build_qwen_vl_client", lambda settings: None)
@@ -48,7 +48,22 @@ def test_swarm_graph_mem0_recall_and_persist(monkeypatch):
             "image_analysis": agent,
         },
     )
-    monkeypatch.setattr(swarm_graph, "build_mem0_client", lambda settings: fake_mem0)
+    monkeypatch.setattr(swarm_graph, "build_memory_client", lambda settings: fake_memory)
+    monkeypatch.setattr(
+        swarm_graph,
+        "answer_with_evidence",
+        lambda query, settings: type(
+            "Evidence",
+            (),
+            {
+                "handled": True,
+                "answer": "evidence answer",
+                "source": "test",
+                "citations": [],
+                "debug": {},
+            },
+        )(),
+    )
 
     settings = SimpleNamespace(
         guardrails_enabled=False,
@@ -70,5 +85,7 @@ def test_swarm_graph_mem0_recall_and_persist(monkeypatch):
         config={"configurable": {"thread_id": "sid-1"}},
     )
 
-    assert agent.last_inputs is not None
-    assert fake_mem0.remember_calls
+    assert agent.last_inputs is None
+    assert fake_memory.remember_calls
+    assert fake_memory.remember_calls[0][0] == "default-user"
+    assert fake_memory.remember_calls[0][2] == "sid-1"

@@ -25,7 +25,7 @@
 - FAISS / Qdrant（可选）
 - PostgreSQL checkpointer / in-memory checkpointer
 - ElevenLabs STT/TTS（可选）
-- Mem0 长期记忆（可选）
+- Postgres 原始消息 + Qdrant 长期记忆/用户画像（可选）
 
 ## 目录结构
 
@@ -40,7 +40,7 @@ cook-proj/
 │  ├─ db/                    # 会话与消息持久化
 │  ├─ graphs/                # LangGraph swarm 图与公共节点
 │  ├─ llms/                  # LLM/VLM 客户端构造
-│  ├─ memory/                # Mem0 等长期记忆封装
+│  ├─ memory/                # Postgres + Qdrant 长期记忆封装
 │  ├─ rag/                   # RAG ingestion/retrieval/generation
 │  ├─ services/              # Chat/Speech 服务
 │  ├─ skills/                # 文档驱动 Skill loader 与 defs
@@ -191,6 +191,8 @@ QDRANT_API_KEY=
 QDRANT_COLLECTION=rag_documents
 ```
 
+知识库控制台支持上传 `.md/.txt/.json/.pdf`。其中 `.txt/.json/.pdf` 会先转换为 Markdown，再进入现有 RAG loader 和索引重建流程；PDF 默认使用 PyMuPDF 轻量解析文本层，可通过上传参数 `pdf_parser=marker` 切换到 `marker-pdf` 深度解析。轻量解析不下载模型，适合文本型 PDF；扫描件或文本层过少的 PDF 会提示使用深度解析。
+
 ## 可选功能开关
 
 默认均可关闭，避免缺外部服务时影响主流程。
@@ -199,7 +201,8 @@ QDRANT_COLLECTION=rag_documents
 MULTIMODAL_ENABLED=true
 HITL_ENABLED=false
 ELEVENLABS_ENABLED=false
-MEM0_ENABLED=false
+MEMORY_BACKEND=vector
+VECTOR_MEMORY_ENABLED=true
 HARNESS_ENABLED=false
 TAVILY_ENABLED=false
 ```
@@ -207,9 +210,9 @@ TAVILY_ENABLED=false
 - `MULTIMODAL_ENABLED`：图片上传与 VLM 摘要。
 - `HITL_ENABLED`：LangGraph interrupt 人工复核。
 - `ELEVENLABS_ENABLED`：STT/TTS 语音能力。
-- `MEM0_ENABLED`：长期记忆。
+- `MEMORY_BACKEND`：长期记忆后端，`vector` 表示用 Postgres 原始消息 + Qdrant 向量记忆，`off` 表示关闭。
 - `HARNESS_ENABLED`：确定性安全约束与自动修复。
-- `TAVILY_ENABLED`：Web Search。
+- `TAVILY_ENABLED`：Web Search；普通文本问答会先走知识库，知识库不可用/证据不足时再按该开关决定是否联网兜底。
 
 ## 开发与验证
 

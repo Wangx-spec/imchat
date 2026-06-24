@@ -3,8 +3,12 @@ from __future__ import annotations
 import re
 
 from pathlib import Path
-from llms.qwen_vl import QwenVLClient
-from rag.ingestion.pdf_parser import ParsedPdfDoc
+from typing import TYPE_CHECKING
+
+from rag.ingestion.pdf_types import ParsedPdfDoc
+
+if TYPE_CHECKING:
+    from llms.qwen_vl import QwenVLClient
 
 _MD_IMAGE_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 
@@ -81,6 +85,7 @@ def render_markdown(
     vlm: QwenVLClient | None = None,
     static_url_prefix: str = "/static/rag_assets/images",
     assets_root: Path | None = None,
+    source_format: str = "markdown_from_pdf",
 ) -> str:
     title = (parsed_doc.title or Path(parsed_doc.source_path).stem).strip()
     header: list[str] = [
@@ -89,7 +94,7 @@ def render_markdown(
         f"> Source PDF: {parsed_doc.source_path.strip()}",
         f"> Topic: {topic}",
         "> Origin Type: pdf",
-        "> Source Format: markdown_from_pdf",
+        f"> Source Format: {source_format}",
         "",
     ]
 

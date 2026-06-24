@@ -26,6 +26,7 @@ logger = logging.getLogger("chat.web")
 
 from db.conversations import (
     create_conversation,
+    delete_conversation,
     list_conversations,
     update_conversation,
 )
@@ -276,3 +277,20 @@ def get_conversations() -> list[dict]:
 @router.get("/conversations/{session_id}/messages")
 def get_messages(session_id: str) -> list[dict]:
     return list_messages(session_id)
+
+
+@router.delete("/conversations/{session_id}")
+def remove_conversation(session_id: str) -> dict:
+    sid = (session_id or "").strip()
+    if not sid:
+        raise HTTPException(status_code=400, detail="session_id is required")
+    if not try_acquire_session(sid):
+        raise HTTPException(status_code=409, detail="This conversation is currently processing.")
+    try:
+        deleted = delete_conversation(sid)
+    finally:
+        release_session(sid)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    logger.info("[CHAT_DELETE] session=%s", sid)
+    return {"ok": True, "session_id": sid}

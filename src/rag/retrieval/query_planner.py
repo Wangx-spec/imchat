@@ -33,8 +33,10 @@ class LLMQueryPlanner:
         timeout_ms: int = 2000,
         max_variants: int = 5,
         llm: Any | None = None,
+        cache: Any | None = None,
     ) -> None:
         self.max_variants = max_variants
+        self.cache = cache
         if llm is not None:
             self.llm = llm
         else:
@@ -162,12 +164,22 @@ class LLMQueryPlanner:
         if not q:
             return QueryPlan("", "", [], [], used_llm=False, error="empty_query")
 
+        cache_key = q.lower()
+        if self.cache is not None:
+            cached = self.cache.get(cache_key)
+            if cached is not None:
+                return cached
+
         prompt = build_query_prompt(q, self.max_variants)
         try:
             out = self.llm.invoke(prompt)
             data = self._extract_json(getattr(out, "content", ""))
 
-            return self._sanitize_plan_payload(q, data)
+            planned = self._sanitize_plan_payload(q, data)
+            # 仅缓存成功的 LLM 规划，避免把瞬时失败的兜底结果固化
+            if self.cache is not None and planned.used_llm and not planned.error:
+                self.cache.set(cache_key, planned)
+            return planned
 
             # normalized = str(data.get("normalized_query", "")).strip() or q
             # terms = [str(x).strip() for x in (data.get("core_terms") or []) if str(x).strip()]

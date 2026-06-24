@@ -17,6 +17,8 @@ class SwarmState(MessagesState):
     subtasks: list[dict]
     contributions: Annotated[list, operator.add]
     final_answer: str | None
+    evidence_answered: bool
+    evidence_source: str | None
 
     # 多模态（复用 common_nodes 已有字段）
     attachments: list[dict]

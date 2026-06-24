@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from langchain_community.retrievers import BM25Retriever
 from langchain_core.documents import Document
 
+from rag.core.circuit_breaker import CircuitBreaker
 from rag.core.types import RetrievalResult
 from rag.retrieval.query_planner import QueryPlan
 
@@ -33,6 +36,11 @@ class HybridRetriever:
         rerank_backend: str = "qwen",
         rerank_local_model: str = "BAAI/bge-reranker-v2-m3",
         rerank_device: str = "cpu",
+        parallel_recall: bool = True,
+        parallel_max_workers: int = 8,
+        breaker_enabled: bool = True,
+        breaker_fail_threshold: int = 3,
+        breaker_recovery_s: float = 30.0,
     ) -> None:
         """初始化混合检索器及其可选的 Qwen 重排参数。"""
         self.vectorstore = vectorstore
@@ -40,6 +48,8 @@ class HybridRetriever:
         self.parent_map = parent_map
         self.child_parent = child_parent
         self.rrf_k = rrf_k
+        self.parallel_recall = parallel_recall
+        self.parallel_max_workers = max(1, int(parallel_max_workers))
 
         self.bm25 = BM25Retriever.from_documents(
             children,
@@ -57,6 +67,13 @@ class HybridRetriever:
         self.rerank_local_model = rerank_local_model
         self.rerank_device = rerank_device
         self._local_reranker = None
+
+        # 远程 rerank 熔断器：连续失败后冷却期内直接走原排序，避免每次都等超时
+        self._rerank_breaker: CircuitBreaker | None = (
+            CircuitBreaker(fail_threshold=breaker_fail_threshold, recovery_s=breaker_recovery_s)
+            if breaker_enabled
+            else None
+        )
 
     def _load_local_reranker(self):
         if self._local_reranker is not None:
@@ -78,6 +95,60 @@ class HybridRetriever:
         """执行 BM25 稀疏检索并返回前 k 个子文档。"""
         self.bm25.k = k
         return self.bm25.invoke(query)
+
+    def _recall_one(self, variant: str, k_per: int) -> tuple[list[Document], list[Document]]:
+        """对单个查询变体执行向量 + BM25 召回，失败时隔离为空结果。"""
+        try:
+            vector_docs = self.vector_search(variant, k_per)
+        except Exception as exc:
+            logger.warning("[RECALL_VARIANT_FAILED] kind=vector variant=%r error=%s", variant, exc)
+            vector_docs = []
+        try:
+            bm25_docs = self.bm25_search(variant, k_per)
+        except Exception as exc:
+            logger.warning("[RECALL_VARIANT_FAILED] kind=bm25 variant=%r error=%s", variant, exc)
+            bm25_docs = []
+        return vector_docs, bm25_docs
+
+    def _recall_variants(
+        self, variants: list[str], k_per: int
+    ) -> tuple[list[Document], list[Document], bool]:
+        """顺序或并行召回所有变体，返回 (vector_docs, bm25_docs, used_parallel)。
+
+        BM25Retriever.k 是共享可变状态，因此 BM25 检索串行执行，
+        仅对向量检索（只读 + HTTP embedding）做线程并行。
+        """
+        all_vector_docs: list[Document] = []
+        all_bm25_docs: list[Document] = []
+
+        use_parallel = self.parallel_recall and len(variants) > 1
+        if not use_parallel:
+            for v in variants:
+                vector_docs, bm25_docs = self._recall_one(v, k_per)
+                all_vector_docs.extend(vector_docs)
+                all_bm25_docs.extend(bm25_docs)
+            return all_vector_docs, all_bm25_docs, False
+
+        # BM25 串行（self.bm25.k 共享，不可并发），向量检索并行。
+        for v in variants:
+            try:
+                all_bm25_docs.extend(self.bm25_search(v, k_per))
+            except Exception as exc:
+                logger.warning("[RECALL_VARIANT_FAILED] kind=bm25 variant=%r error=%s", v, exc)
+
+        max_workers = min(self.parallel_max_workers, len(variants))
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for vector_docs in executor.map(lambda v: self._vector_search_safe(v, k_per), variants):
+                all_vector_docs.extend(vector_docs)
+
+        return all_vector_docs, all_bm25_docs, True
+
+    def _vector_search_safe(self, variant: str, k_per: int) -> list[Document]:
+        try:
+            return self.vector_search(variant, k_per)
+        except Exception as exc:
+            logger.warning("[RECALL_VARIANT_FAILED] kind=vector variant=%r error=%s", variant, exc)
+            return []
 
     def _tokenize_for_sparse(self, text: str) -> list[str]:
         """为稀疏检索分词：英文词、中文单字和中文双字。"""
@@ -339,6 +410,11 @@ class HybridRetriever:
             info["rerank_error"] = "empty_candidates"
             return parents, info
 
+        # 熔断打开：冷却期内直接走原排序，避免每次都等远程超时
+        if self._rerank_breaker is not None and not self._rerank_breaker.allow():
+            info["rerank_error"] = "breaker_open"
+            return parents, info
+
         candidates = parents[: max(self.rerank_candidate_k, self.rerank_top_n)]
         docs = [self._build_rerank_text(p) for p in candidates]
         top_n = min(len(candidates), max(1, self.rerank_top_n))
@@ -357,9 +433,13 @@ class HybridRetriever:
 
             info["rerank_ok"] = True
             info["rerank_scores"] = scores
+            if self._rerank_breaker is not None:
+                self._rerank_breaker.record_success()
             return reranked, info
         except Exception as exc:
             info["rerank_error"] = f"{type(exc).__name__}: {exc}"
+            if self._rerank_breaker is not None:
+                self._rerank_breaker.record_failure()
             return parents, info
         
     def rerank_parents(self, query: str, parents: list[Document]) -> tuple[list[Document], dict[str, Any]]:
@@ -540,15 +620,11 @@ class HybridRetriever:
             variants = [normalized_query]
 
         k_per = max(8, retrieval_k // max(1, len(variants)))
-        all_vector_docs: list[Document] = []
-        all_bm25_docs: list[Document] = []
 
-        for v in variants:
-            all_vector_docs.extend(self.vector_search(v, k_per))
-            all_bm25_docs.extend(self.bm25_search(v, k_per))
+        recall_start = time.monotonic()
+        vector_docs, bm25_docs, used_parallel = self._recall_variants(variants, k_per)
+        recall_elapsed_ms = (time.monotonic() - recall_start) * 1000.0
 
-        vector_docs = all_vector_docs
-        bm25_docs = all_bm25_docs
         fused_children = self.rrf_fuse(vector_docs, bm25_docs)
 
         candidate_parent_k = max(top_k * 8, self.rerank_candidate_k, 40)
@@ -603,6 +679,8 @@ class HybridRetriever:
                 "fused_hits": len(fused_children),
                 "parent_hits": len(parents),
                 "rrf_k": self.rrf_k,
+                "recall_parallel": used_parallel,
+                "recall_elapsed_ms": round(recall_elapsed_ms, 1),
                 "variant_queries": variants,
                 "query_normalized": normalized_query,
                 "query_core_terms": (query_plan.core_terms if query_plan else []),

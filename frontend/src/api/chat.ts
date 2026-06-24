@@ -21,6 +21,22 @@ export async function listMessages(sessionId: string): Promise<BackendMessage[]>
   return (await res.json()) as BackendMessage[];
 }
 
+export async function deleteConversation(sessionId: string): Promise<void> {
+  const res = await fetch(`/api/conversations/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    let detail = "删除会话失败";
+    try {
+      const data = (await res.json()) as { detail?: string };
+      detail = data.detail || detail;
+    } catch {
+      detail = `${detail}: ${res.status}`;
+    }
+    throw new Error(detail);
+  }
+}
+
 export async function streamChat(
   sessionId: string,
   message: string,

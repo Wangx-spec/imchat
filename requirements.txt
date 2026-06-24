@@ -16,6 +16,7 @@ langchain-tavily>=0.1
 sentence-transformers>=2.2.0
 httpx>=0.27,<0.29
 python-multipart>=0.0.9
+pymupdf>=1.24
 marker-pdf>=1.0
 langgraph>=0.2.57
 pytest>=8.0

@@ -8,17 +8,31 @@
     </div>
 
     <div class="conv-list">
-      <button
+      <div
         v-for="conversation in chat.conversations"
         :key="conversation.session_id"
-        type="button"
-        class="conv-item"
+        class="conv-row"
         :class="{ active: conversation.session_id === chat.sessionId }"
-        @click="chat.switchSession(conversation.session_id)"
       >
-        <span class="conv-title">{{ conversation.title || "新会话" }}</span>
-        <span class="conv-time">{{ formatTime(conversation.updated_at) }}</span>
-      </button>
+        <button
+          type="button"
+          class="conv-item"
+          :disabled="chat.isStreaming"
+          @click="chat.switchSession(conversation.session_id)"
+        >
+          <span class="conv-title">{{ conversation.title || "新会话" }}</span>
+          <span class="conv-time">{{ formatTime(conversation.updated_at) }}</span>
+        </button>
+        <button
+          type="button"
+          class="delete-btn"
+          title="删除会话"
+          :disabled="chat.isStreaming"
+          @click.stop="confirmDelete(conversation.session_id)"
+        >
+          删除
+        </button>
+      </div>
       <p v-if="!chat.conversations.length" class="empty">暂无会话</p>
     </div>
   </aside>
@@ -28,6 +42,11 @@
 import { useChatStore } from "@/stores/chat";
 
 const chat = useChatStore();
+
+async function confirmDelete(sessionId: string) {
+  if (!window.confirm("确定删除这个会话及其历史消息吗？")) return;
+  await chat.deleteConversation(sessionId);
+}
 
 function formatTime(value?: string | null): string {
   if (!value) return "";
@@ -72,8 +91,17 @@ function formatTime(value?: string | null): string {
   padding: 8px;
 }
 
+.conv-row {
+  display: flex;
+  align-items: stretch;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
 .conv-item {
   display: block;
+  flex: 1;
+  min-width: 0;
   width: 100%;
   text-align: left;
   border: 1px solid transparent;
@@ -81,19 +109,41 @@ function formatTime(value?: string | null): string {
   background: #f8fafc;
   color: #334155;
   padding: 10px 12px;
-  margin-bottom: 6px;
   transition: background 0.15s ease, border-color 0.15s ease;
 }
 
-.conv-item:hover {
+.conv-item:hover,
+.conv-row.active .conv-item {
   border-color: #cbd5e1;
   background: #f1f5f9;
 }
 
-.conv-item.active {
+.conv-row.active .conv-item {
   border-color: #93c5fd;
   background: var(--primary-soft);
   color: #1e3a8a;
+}
+
+.delete-btn {
+  align-self: stretch;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: #fff1f2;
+  color: #be123c;
+  cursor: pointer;
+  font-size: 0.72rem;
+  padding: 0 8px;
+}
+
+.delete-btn:hover:not(:disabled) {
+  border-color: #fecdd3;
+  background: #ffe4e6;
+}
+
+.conv-item:disabled,
+.delete-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
 }
 
 .conv-title {

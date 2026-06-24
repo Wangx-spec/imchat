@@ -3,11 +3,27 @@ import logging
 from typing import Any
 
 from config.settings import load_settings
+from rag.core.circuit_breaker import CircuitBreaker
 
 from langchain_core.tools import tool
 from langchain_tavily import TavilySearch
 
 logger = logging.getLogger("chat.tools")
+
+_web_search_breaker: CircuitBreaker | None = None
+
+
+def _get_web_search_breaker(settings: Any) -> CircuitBreaker | None:
+    """惰性初始化 web_search 的熔断器（按进程单例）。"""
+    global _web_search_breaker
+    if not getattr(settings, "breaker_enabled", True):
+        return None
+    if _web_search_breaker is None:
+        _web_search_breaker = CircuitBreaker(
+            fail_threshold=getattr(settings, "breaker_fail_threshold", 3),
+            recovery_s=getattr(settings, "breaker_recovery_s", 30.0),
+        )
+    return _web_search_breaker
 
 
 def _extract_result_items(docs: Any) -> list[dict[str, Any]] | None:
@@ -111,6 +127,11 @@ def web_search(query: str) -> str:
             error="tavily_disabled",
         )
 
+    breaker = _get_web_search_breaker(settings)
+    if breaker is not None and not breaker.allow():
+        logger.info("[TOOL_CALL] name=web_search skipped reason=breaker_open")
+        return _build_web_payload(query=q, ok=False, answer="", error="breaker_open")
+
     try:
         search_kwargs: dict[str, Any] = {"max_results": 5}
         if settings.tavily_api_key:
@@ -165,7 +186,11 @@ def web_search(query: str) -> str:
             answer_parts.append("\n".join(lines))
         answer = "\n\n".join(answer_parts) if answer_parts else "未检索到相关网页结果。"
         logger.info("[TOOL_RESULT] name=web_search ok result_count=%d", len(normalized_results))
+        if breaker is not None:
+            breaker.record_success()
         return _build_web_payload(query=q, ok=True, answer=answer, results=normalized_results)
     except Exception as exc:
         logger.exception("[TOOL_RESULT] name=web_search error=%s", exc)
+        if breaker is not None:
+            breaker.record_failure()
         return _build_web_payload(query=q, ok=False, answer="", error=f"tool_exception:{exc}")

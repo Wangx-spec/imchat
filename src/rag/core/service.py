@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from typing import Any
 
 from prompts.knowledge_base_prompt import build_blocked_answer
+from rag.core.cache import TTLCache
 from rag.core.config import sanitize_rag_config, validate_rag_config
 from rag.core.types import AnswerResult, RAGConfig, RetrievalResult
 from rag.generation.generation_router import GenerationRouter
@@ -43,6 +45,17 @@ class RAGService:
         self._index_meta_match = None  # 可选：True/False/None
         self._index_meta_reason = None
 
+        # 查询规划 / 答案缓存（单进程 TTL+LRU），减少重复问句的 LLM 与检索开销
+        cache_enabled = getattr(self.cfg, "cache_enabled", True)
+        cache_ttl_s = getattr(self.cfg, "cache_ttl_s", 300.0)
+        cache_max_size = getattr(self.cfg, "cache_max_size", 512)
+        if cache_enabled:
+            self._plan_cache: TTLCache | None = TTLCache(ttl_s=cache_ttl_s, max_size=cache_max_size)
+            self._answer_cache: TTLCache | None = TTLCache(ttl_s=cache_ttl_s, max_size=cache_max_size)
+        else:
+            self._plan_cache = None
+            self._answer_cache = None
+
     def initialize(self, force_rebuild: bool = False) -> None:
         if not self.cfg.enabled:
             self.ready = False
@@ -65,6 +78,7 @@ class RAGService:
                 self.query_planner = LLMQueryPlanner(
                     llm=self.query_planner_llm,
                     max_variants=self.cfg.rag_query_plan_max_variants,
+                    cache=self._plan_cache,
                 )
             except Exception as exc:
                 self.query_planner = None
@@ -77,6 +91,7 @@ class RAGService:
                     model=self.cfg.rag_query_plan_model,
                     timeout_ms=self.cfg.rag_query_plan_timeout_ms,
                     max_variants=self.cfg.rag_query_plan_max_variants,
+                    cache=self._plan_cache,
                 )
             except Exception as exc:
                 self.query_planner = None
@@ -120,6 +135,11 @@ class RAGService:
             rerank_backend=self.cfg.rerank_backend,
             rerank_local_model=self.cfg.rerank_local_model,
             rerank_device=self.cfg.rerank_device,
+            parallel_recall=getattr(self.cfg, "parallel_recall", True),
+            parallel_max_workers=getattr(self.cfg, "parallel_max_workers", 8),
+            breaker_enabled=getattr(self.cfg, "breaker_enabled", True),
+            breaker_fail_threshold=getattr(self.cfg, "breaker_fail_threshold", 3),
+            breaker_recovery_s=getattr(self.cfg, "breaker_recovery_s", 30.0),
         )
 
         self.ready = True
@@ -189,6 +209,15 @@ class RAGService:
             return AnswerResult(query=query, route="disabled", answer="RAG 未启用。")
         if not self.ready:
             return AnswerResult(query=query, route="not_ready", answer="RAG 尚未初始化。")
+
+        cache_key = (query or "").strip().lower()
+        if self._answer_cache is not None and cache_key:
+            cached = self._answer_cache.get(cache_key)
+            if cached is not None:
+                cached_debug = dict(cached.debug or {})
+                cached_debug["cache_hit"] = True
+                return replace(cached, debug=cached_debug)
+
         try:
             route = self.router.route_query(query)
             rewritten = self.router.rewrite_query(query, route)
@@ -267,7 +296,7 @@ class RAGService:
             insufficient_info = self.router.is_insufficient_answer(answer_text)
             debug["insufficient_info"] = insufficient_info
 
-            return AnswerResult(
+            result = AnswerResult(
                 query=query, 
                 route=route, 
                 answer=answer_text, 
@@ -275,6 +304,10 @@ class RAGService:
                 debug=debug, 
                 insufficient_info=insufficient_info
                 )
+            # 仅缓存证据充足的正常回答，避免把信息不足结果固化
+            if self._answer_cache is not None and cache_key and not insufficient_info:
+                self._answer_cache.set(cache_key, result)
+            return result
         except Exception as exc:
             logger.exception("RAG answer failed: %s", exc)
             return AnswerResult(

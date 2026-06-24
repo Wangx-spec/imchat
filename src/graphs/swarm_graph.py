@@ -20,11 +20,12 @@ from graphs.common_nodes import (
 )
 
 from graphs.lead_agent import build_decompose_node, build_synthesize_node
-from memory.mem0_client import build_mem0_client
+from memory.memory_client import build_memory_client
 from graphs.triage import build_triage_node
 from graphs.swarm_state import SwarmState
 from llms.openai_chat import build_openai_chat_model, build_router_chat_model
 from llms.qwen_vl import build_qwen_vl_client
+from services.evidence_answer_service import answer_with_evidence
 
 logger = logging.getLogger(__name__)
 
@@ -72,7 +73,7 @@ def build_swarm_graph(settings, checkpointer=None):
     router_llm = build_router_chat_model(settings)
     vlm = build_qwen_vl_client(settings)
     agents = build_domain_agents(settings)
-    mem0_client = build_mem0_client(settings)
+    memory_client = build_memory_client(settings)
 
     max_iters = max(1, int(getattr(settings, "agent_max_iterations", 5)))
     agent_config = {"recursion_limit": 2 * max_iters + 1}
@@ -143,23 +144,50 @@ def build_swarm_graph(settings, checkpointer=None):
             "hitl_reason": "image_diagnostic_request" if needs_hitl else None,
         }
 
+    def evidence_answer_node(state) -> dict:
+        if state.get("had_image"):
+            return {"evidence_answered": False}
+        query = latest_user_message_text(state)
+        result = answer_with_evidence(query, settings)
+        if not result.handled:
+            return {"evidence_answered": False}
+        logger.info(
+            "[EVIDENCE_ANSWER] source=%s citation_count=%d debug=%s",
+            result.source,
+            len(result.citations),
+            result.debug,
+        )
+        return {
+            "evidence_answered": True,
+            "evidence_source": result.source,
+            "final_answer": result.answer,
+            "messages": [AIMessage(content=result.answer)],
+            "needs_human_validation": False,
+        }
+
         
     def fan_out(state):
         return [Send("worker", {**state, "__task__": t}) for t in state["subtasks"]]
 
     def _user_id_from_config(config: dict | None) -> str:
+        configured = str(getattr(settings, "vector_memory_user_id", "") or "").strip()
+        if configured:
+            return configured
+        return "default-user"
+
+    def _session_id_from_config(config: dict | None) -> str:
         conf = (config or {}).get("configurable", {}) if isinstance(config, dict) else {}
         thread_id = str(conf.get("thread_id") or "").strip()
         return thread_id or "anonymous"
 
     def recall_node(state, config=None) -> dict:
-        if mem0_client is None:
+        if memory_client is None:
             return {}
         user_id = _user_id_from_config(config)
         query = latest_user_message_text(state)
         if not query:
             return {}
-        memories = mem0_client.recall(user_id=user_id, query=query, limit=5)
+        memories = memory_client.recall(user_id=user_id, query=query, limit=5)
         if not memories:
             return {}
         mem_block = "\n".join([f"- {m}" for m in memories])
@@ -168,9 +196,10 @@ def build_swarm_graph(settings, checkpointer=None):
         }
 
     def persist_node(state, config=None) -> dict:
-        if mem0_client is None:
+        if memory_client is None:
             return {}
         user_id = _user_id_from_config(config)
+        session_id = _session_id_from_config(config)
         messages = state.get("messages", [])
         if not isinstance(messages, list) or not messages:
             return {}
@@ -185,8 +214,9 @@ def build_swarm_graph(settings, checkpointer=None):
                 break
         if not user_text or not ai_text:
             return {}
-        mem0_client.remember(
+        memory_client.remember(
             user_id=user_id,
+            session_id=session_id,
             messages=[
                 {"role": "user", "content": user_text},
                 {"role": "assistant", "content": ai_text},
@@ -199,12 +229,13 @@ def build_swarm_graph(settings, checkpointer=None):
     builder.add_node("image_input_guardrail", build_image_input_guardrail_node(settings))
     builder.add_node("image_caption", build_image_caption_node(vlm))
     builder.add_node("triage", build_triage_node(router_llm, settings))
+    builder.add_node("evidence_answer", evidence_answer_node)
     builder.add_node("decompose", build_decompose_node(router_llm, settings))
     builder.add_node("worker", worker_node)
     builder.add_node("synthesize", build_synthesize_node(llm))
 
     builder.add_node("hitl_node", build_hitl_node(settings))
-    if mem0_client is not None:
+    if memory_client is not None:
         builder.add_node("recall_node", recall_node)
         builder.add_node("persist_node", persist_node)
     
@@ -226,25 +257,31 @@ def build_swarm_graph(settings, checkpointer=None):
     )
     if guardrails_on:
         builder.add_edge("image_caption", "input_guardrail")
-        if mem0_client is not None:
+        if memory_client is not None:
             builder.add_conditional_edges(
                 "input_guardrail",
                 lambda s: "blocked" if s.get("blocked") else "recall",
                 {"blocked": END, "recall": "recall_node"},
             )
-            builder.add_edge("recall_node", "triage")
+            builder.add_edge("recall_node", "evidence_answer")
         else:
             builder.add_conditional_edges(
                 "input_guardrail",
-                lambda s: "blocked" if s.get("blocked") else "triage",
-                {"blocked": END, "triage": "triage"},
+                lambda s: "blocked" if s.get("blocked") else "evidence",
+                {"blocked": END, "evidence": "evidence_answer"},
             )
     else:
-        if mem0_client is not None:
+        if memory_client is not None:
             builder.add_edge("image_caption", "recall_node")
-            builder.add_edge("recall_node", "triage")
+            builder.add_edge("recall_node", "evidence_answer")
         else:
-            builder.add_edge("image_caption", "triage")
+            builder.add_edge("image_caption", "evidence_answer")
+
+    builder.add_conditional_edges(
+        "evidence_answer",
+        lambda s: "answered" if s.get("evidence_answered") else "triage",
+        {"answered": "hitl_node", "triage": "triage"},
+    )
 
     builder.add_conditional_edges(
         "triage",
@@ -262,7 +299,7 @@ def build_swarm_graph(settings, checkpointer=None):
     tail = ["hitl_node"]
     if guardrails_on:
         tail.append("output_guardrail")
-    if mem0_client is not None:
+    if memory_client is not None:
         tail.append("persist_node")
     tail.append(END)
     for src, dst in zip(tail, tail[1:]):

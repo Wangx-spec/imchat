@@ -44,6 +44,14 @@ def build_rag_config(settings: Settings) -> RAGConfig:
         rerank_backend=settings.rag_rerank_backend,
         rerank_local_model=settings.rag_rerank_local_model,
         rerank_device=settings.rag_rerank_device,
+        parallel_recall=settings.rag_parallel_recall,
+        parallel_max_workers=settings.rag_parallel_max_workers,
+        cache_enabled=settings.rag_cache_enabled,
+        cache_ttl_s=settings.rag_cache_ttl_s,
+        cache_max_size=settings.rag_cache_max_size,
+        breaker_enabled=settings.rag_breaker_enabled,
+        breaker_fail_threshold=settings.rag_breaker_fail_threshold,
+        breaker_recovery_s=settings.rag_breaker_recovery_s,
     )
     return cfg
 
@@ -63,6 +71,21 @@ def sanitize_rag_config(cfg: RAGConfig) -> RAGConfig:
 
     if out.chunk_overlap >= out.chunk_size:
         out.chunk_overlap = max(0, out.chunk_size // 5)
+
+    if out.parallel_max_workers < 1:
+        out.parallel_max_workers = 1
+
+    if out.cache_ttl_s < 0:
+        out.cache_ttl_s = 0.0
+
+    if out.cache_max_size < 1:
+        out.cache_max_size = 1
+
+    if out.breaker_fail_threshold < 1:
+        out.breaker_fail_threshold = 1
+
+    if out.breaker_recovery_s < 0:
+        out.breaker_recovery_s = 0.0
 
     return out
 

@@ -37,6 +37,17 @@ class RAGConfig:
     rerank_backend: str = "qwen"
     rerank_local_model: str = "BAAI/bge-reranker-v2-m3"
     rerank_device: str = "cpu"
+    # 并行多变体召回
+    parallel_recall: bool = True
+    parallel_max_workers: int = 8
+    # TTL+LRU 缓存（query plan / answer）
+    cache_enabled: bool = True
+    cache_ttl_s: float = 300.0
+    cache_max_size: int = 512
+    # 远程依赖熔断（rerank / web_search）
+    breaker_enabled: bool = True
+    breaker_fail_threshold: int = 3
+    breaker_recovery_s: float = 30.0
 
 
 @dataclass
